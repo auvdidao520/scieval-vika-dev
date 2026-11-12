@@ -5,6 +5,8 @@ import sys
 from pathlib import Path
 
 MAX_REQUEST = 65536
+MAX_BATCH_EVENTS = 100
+MAX_BATCH_BYTES = 1024 * 1024
 
 
 def main():
@@ -28,11 +30,18 @@ def main():
     try:
         if command == 'pending':
             events = []
-            for event_id, job_id, revision, payload in db.execute('SELECT event_id, job_id, revision, payload FROM outbox WHERE delivered=0 ORDER BY rowid'):
+            size = len('{"events":[]}')
+            for event_id, job_id, revision, payload in db.execute('SELECT event_id, job_id, revision, payload FROM outbox WHERE delivered=0 ORDER BY rowid LIMIT ?', (MAX_BATCH_EVENTS,)):
                 event = json.loads(payload)
                 if not isinstance(event, dict) or (event.get('event_id'), event.get('job_id'), event.get('revision')) != (event_id, job_id, revision):
                     raise ValueError('outbox payload identity mismatch')
+                event_size = len(json.dumps(event, ensure_ascii=True, separators=(',', ':'))) + (1 if events else 0)
+                if size + event_size > MAX_BATCH_BYTES:
+                    if not events:
+                        raise ValueError('outbox event exceeds batch size limit')
+                    break
                 events.append(event)
+                size += event_size
             result = {'events': events}
         else:
             with db:
