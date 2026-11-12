@@ -29,3 +29,5 @@
 ### 可信事件投递对账原型
 
 `trusted_delivery.deliver_pending` 规定可信网关的查找和路由边界，校验已接收报告与持久投递意图后确认。当前没有生产网关或调度接线，不能仅靠此函数接收真实事件；调用方必须从 Core 账本读取并验证指定 connector 实例，按任务和已接受序号幂等路由。查询得到报告但找不到已接受事件时保持待处理，不伪造 trigger ID。详情见 `docs/n4-trusted-delivery-t61.html`。
+
+`task_recovery.recover_task_binding` 是创建后绑定恢复的编排原型：先通过可信网关幂等预留且不启动任务，再保存绑定，最后幂等激活。网关尚未实现，不能接入生产；须由网关原子预留、验证已接受的原始事件并在绑定前阻止 worker 运行。详见 `docs/n5-task-binding-t62.html`。
