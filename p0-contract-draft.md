@@ -6,9 +6,9 @@
 
 建议使用异步接口，JSON UTF-8，认证和授权由部署环境提供。所有 ID 为不含个人信息的 opaque string；时间为 UTC RFC 3339。`POST /v1/evaluations` 要求 `Idempotency-Key`，取 `job_id:round:input_sha256:rubric_version`；服务端按调用方隔离键并保存请求规范化哈希，重复同内容返回原 evaluation，重复键但内容不同返回 409；应持久化去重记录至少覆盖作业及恢复周期。禁止用短期内存去重替代持久化。
 
-请求示例（地址仅示意，读取前必须核验授权、不可变版本及摘要）：
+请求示例。远程服务无法读取 Vika 本机路径，`http_evaluator.py` 因此同时上传 HTML 的 base64 内容；服务端须解码后重新计算摘要，不能只信任 URI：
 ```json
-{"schema_version":"1.0","job_id":"job_123","round":1,"artifact":{"uri":"artifact://job_123/1/lesson.html","sha256":"<64 lowercase hex>","media_type":"text/html"},"rubric":{"id":"scieval-equip-13","version":"draft-1"},"policy_version":"draft-1"}
+{"schema_version":"1.0","job_id":"job_123","round":1,"artifact":{"uri":"artifact://job_123/1/lesson.html","sha256":"<64 lowercase hex>","media_type":"text/html","content_base64":"<HTML bytes encoded as base64>"},"rubric":{"id":"scieval-equip-13","version":"draft-1"},"policy_version":"draft-1"}
 ```
 成功返回 202 和 `evaluation_id`、`status=queued`、`status_url`；重复请求可返回 200 和原对象。无效请求 400、未认证 401、无权限 403、内容冲突 409、过大 413、限流 429（带 Retry-After）、暂不可用 503。HTTP 重试使用相同幂等键和指数退避；超时后先查询/重复同键提交，不能生成新轮次。
 
@@ -61,7 +61,7 @@ kanban 至少存 `job_id`, `state`, 单调递增 `revision`, 当前 `round`, `in
 
 路径建议 `jobs/{job_id}/rounds/{round}/`，包含 input.html、input.manifest.json、request.json、report.json、report.manifest.json；manifest 保存内容 SHA-256、媒体类型、创建时间、生产者版本、父轮次和关联 ID。对象以条件创建或版本锁定禁止覆盖，同一路径不同内容视为冲突；读取和恢复时重新验摘要。审批和审计事件追加存储；作业级策略、访问控制、保留期和删除政策待确定。个人信息最小化，日志不记录课件正文或密钥。
 
-OV skill 草案职责：验证授权与输入 → 创建/恢复作业 → 调 Runtime 产出快照 → 幂等提交评测 → 校验报告 → 按版本化策略改稿或转人工 → 记录审批与发布事件。只用受限工具访问本作业存储；课程内容和报告视为数据，不作为覆盖系统指令的指令。具体 skill 文件格式及 kanban API 应以所选 Workers 预览提交实际接口为准，当前未核验。
+OV skill 草案职责：验证授权与输入 → 创建/恢复作业 → 调 Runtime 产出快照 → 幂等提交评测 → 校验报告 → 按版本化策略改稿或转人工 → 记录审批与发布事件。只用受限工具访问本作业存储；课程内容和报告视为数据，不作为覆盖系统指令的指令。本分支的 P0 适配器以 OV resource 中的 `<job_id>/state.json` 保存上述状态和 outbox，通过 `ov read/write` 访问并回读核对。单主机内用 flock 串行化同一作业的写者；这不是 OV 分布式 CAS，多主机前必须换成具备条件写或事务的状态服务。具体 skill 文件格式及 kanban API 仍以实际 OV 版本为准，当前未假定存在 `ov kanban` 命令。
 
 ## 已核实事项与待办
 
