@@ -65,6 +65,9 @@ function childConfig(config, instance) {
     // Slack shows a mention of the bot as this name, the one the prompt knows.
     agentName: instance.type === 'slack' ? config.agentName ?? null : null,
     emailConfigFile: instance.emailConfigFile ?? null,
+    // Only the scieval worker receives its provider configuration and the path
+    // to the token file; the token itself never enters the connector envelope.
+    scieval: instance.type === 'scieval' ? config.scieval : null,
     // The Lark Connector of the instance that stores meeting notes.
     meetingNotes: instance.type === 'lark' && Boolean(config.meetingNotes),
     // A mailbox stores each mail in OV before reporting it; so does the Lark
