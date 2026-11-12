@@ -17,6 +17,8 @@ The adapter is disabled by default; the manual API does not start a background w
 
 For each event the harness is invoked and the matching unfiltered Runtime ledger record and payload are checked before the P1 acknowledgement is committed. A failed process, filtered event, collision, or failed acknowledgement stops the drain and leaves the event pending. After a crash between ledger insertion and source acknowledgement, replay keeps the same event ID and the Runtime ledger deduplicates it. P1 outbox events have no occurrence timestamps, so `occurred_at` is the ingestion attempt time.
 
+A malformed or identity-mismatched outbox row does not prevent earlier valid rows in the same batch from being delivered. Once that row reaches the head of the queue, the poll fails visibly and does not skip it; repair is required before later rows can be processed.
+
 Ledger acceptance does not mean agent processing or external delivery completed. This local integration does not establish authenticated identity, distributed exactly-once delivery, automatic polling, or real SciEval evaluation; those require separate integration work. Treat the database and bridge configuration as privileged: callers with acknowledgement access can mark source events delivered.
 
 ## Daemon lifecycle

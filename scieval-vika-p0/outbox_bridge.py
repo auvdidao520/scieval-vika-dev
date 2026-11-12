@@ -32,9 +32,16 @@ def main():
             events = []
             size = len('{"events":[]}')
             for event_id, job_id, revision, payload in db.execute('SELECT event_id, job_id, revision, payload FROM outbox WHERE delivered=0 ORDER BY rowid LIMIT ?', (MAX_BATCH_EVENTS,)):
-                event = json.loads(payload)
-                if not isinstance(event, dict) or (event.get('event_id'), event.get('job_id'), event.get('revision')) != (event_id, job_id, revision):
-                    raise ValueError('outbox payload identity mismatch')
+                try:
+                    event = json.loads(payload)
+                    if not isinstance(event, dict) or (event.get('event_id'), event.get('job_id'), event.get('revision')) != (event_id, job_id, revision):
+                        raise ValueError('outbox payload identity mismatch')
+                except (ValueError, TypeError):
+                    # Preserve the valid prefix; the next poll reports the bad
+                    # head event after the prefix has been acknowledged.
+                    if events:
+                        break
+                    raise
                 event_size = len(json.dumps(event, ensure_ascii=True, separators=(',', ':'))) + (1 if events else 0)
                 if size + event_size > MAX_BATCH_BYTES:
                     if not events:

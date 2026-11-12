@@ -10,6 +10,24 @@ BRIDGE = Path(__file__).resolve().parents[1] / 'outbox_bridge.py'
 
 
 class OutboxBatchTests(unittest.TestCase):
+    def test_bad_row_does_not_block_valid_prefix_or_get_skipped(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / 'outbox.sqlite'
+            with sqlite3.connect(database) as db:
+                db.execute('CREATE TABLE outbox (event_id TEXT PRIMARY KEY, job_id TEXT, revision INTEGER, payload TEXT, delivered INTEGER DEFAULT 0)')
+                good = json.dumps({'event_id': 'first', 'job_id': 'job', 'revision': 1})
+                later = json.dumps({'event_id': 'last', 'job_id': 'job', 'revision': 3})
+                db.executemany('INSERT INTO outbox VALUES (?, ?, ?, ?, 0)', [('first', 'job', 1, good), ('bad', 'job', 2, '{'), ('last', 'job', 3, later)])
+            def call(request):
+                return subprocess.run([sys.executable, str(BRIDGE), str(database)], input=json.dumps(request).encode(), capture_output=True)
+            result = call({'command': 'pending'})
+            self.assertEqual([e['event_id'] for e in json.loads(result.stdout)['events']], ['first'])
+            self.assertEqual(call({'command': 'acknowledge', 'event_id': 'first'}).returncode, 0)
+            result = call({'command': 'pending'})
+            self.assertNotEqual(result.returncode, 0)
+            with sqlite3.connect(database) as db:
+                self.assertEqual(db.execute('SELECT event_id FROM outbox WHERE delivered=0 ORDER BY rowid').fetchall(), [('bad',), ('last',)])
+
     def test_backlog_is_batched_in_order_and_recovers_after_acknowledgements(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Path(directory) / 'outbox.sqlite'
