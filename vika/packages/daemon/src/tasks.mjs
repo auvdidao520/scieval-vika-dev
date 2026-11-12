@@ -323,12 +323,26 @@ export class TaskManager {
     const task = this.get(taskId);
     if (!task) throw new Error(`no task ${taskId}`);
     if (task.status === 'stopped') throw new Error(`${taskId} was stopped; create a new task instead`);
+    if (!['owner', 'context'].includes(role)) throw new Error('invalid input role');
+    if (!rows.length || rows.some((row) => !Number.isSafeInteger(row.seq))) throw new Error('accepted input sequence required');
+    let added = false;
     this.transaction(() => {
-      for (const row of rows) this.addInput(taskId, row, role);
-      this.touch(taskId);
-      if (role === 'owner' && (ENDED.has(task.status) || task.status === 'waiting' || task.status === 'blocked')) this.setStatus(taskId, 'queued');
+      for (const row of rows) {
+        const existing = this.db.prepare('SELECT role FROM task_inputs WHERE task_id = ? AND seq = ?').all(taskId, row.seq);
+        if (existing.some((input) => input.role !== role)) throw new Error('input already routed with a different role');
+        if (!existing.length) {
+          this.addInput(taskId, row, role);
+          added = true;
+        }
+      }
+      if (added) {
+        this.touch(taskId);
+        if (role === 'owner' && (ENDED.has(task.status) || task.status === 'waiting' || task.status === 'blocked')) this.setStatus(taskId, 'queued');
+      }
     });
-    if (role === 'owner') this.request(taskId);
+    // A retry after committing but before scheduling can request an already
+    // queued task. A duplicate delivered to an ended task must not restart it.
+    if (role === 'owner' && (added || this.get(taskId).status === 'queued')) this.request(taskId);
     return this.get(taskId);
   }
 
