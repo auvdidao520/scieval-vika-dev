@@ -52,7 +52,7 @@ export function harnessSubmitter(harness, store) {
 
 // Inject a local bridge implementing pending() and acknowledge(eventId), and a
 // durable submitter. No polling, credentials, network, or activation by default.
-export function createSciEvalAdapter({ enabled = false, outbox, submit, now = Date.now } = {}) {
+export function createSciEvalAdapter({ enabled = false, outbox, submit, now = Date.now, shouldStop = () => false } = {}) {
   if (enabled !== true) return { async drain() { return { enabled: false, delivered: 0 }; } };
   if (typeof outbox?.pending !== 'function' || typeof outbox?.acknowledge !== 'function' || typeof submit !== 'function') {
     throw new TypeError('enabled SciEval adapter requires outbox and submit');
@@ -66,6 +66,7 @@ export function createSciEvalAdapter({ enabled = false, outbox, submit, now = Da
       const events = await outbox.pending();
       if (!Array.isArray(events)) throw new TypeError('outbox pending must return an array');
       for (const event of events) {
+        if (shouldStop()) break;
         const result = await submit(toRuntimeEvent(event, now()));
         if (result?.accepted !== true) throw new Error('Runtime did not confirm acceptance');
         await outbox.acknowledge(event.event_id);
@@ -77,8 +78,8 @@ export function createSciEvalAdapter({ enabled = false, outbox, submit, now = Da
 }
 
 // Manual integration point: callers decide when to drain; no background worker.
-export async function createLocalSciEvalAdapter({ enabled = false, harness, store, ...options } = {}) {
+export async function createLocalSciEvalAdapter({ enabled = false, harness, store, shouldStop, ...options } = {}) {
   if (enabled !== true) return createSciEvalAdapter();
   const { createLocalOutbox } = await import('./local-outbox.mjs');
-  return createSciEvalAdapter({ enabled: true, outbox: createLocalOutbox(options), submit: harnessSubmitter(harness, store) });
+  return createSciEvalAdapter({ enabled: true, outbox: createLocalOutbox(options), submit: harnessSubmitter(harness, store), shouldStop });
 }

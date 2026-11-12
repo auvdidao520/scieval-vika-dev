@@ -6,6 +6,8 @@ import { chatEvent } from './event-fixture.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { createLocalOutbox } from '../src/scieval/local-outbox.mjs';
 import { describe, it } from 'node:test';
 import { createLogger } from '../src/logger.mjs';
 import { PersonalAgentDaemon } from '../src/daemon.mjs';
@@ -15,6 +17,22 @@ import { OVConnection, OVUnavailableError } from '../src/ov-connection.mjs';
 import { fakeOV } from './ov-server-fixture.mjs';
 
 describe('daemon event path (mock env)', { concurrency: false }, () => {
+  it('polls the opted-in SciEval outbox and stops it with the daemon', async (context) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'scieval-daemon-'));
+    context.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const databasePath = path.join(dir, 'p1.db');
+    const framework = new URL('../../../../scieval-vika-p0/', import.meta.url).pathname;
+    execFileSync('python3', ['-c', 'import sys; from framework import Store; s=Store(sys.argv[1]); s.create("job-1"); s.transition("job-1",0,"preparing"); s.close()', databasePath], { cwd: framework });
+    const outbox = createLocalOutbox({ databasePath });
+    const [event] = await outbox.pending();
+    const env = await startMockEnv({ config: { scievalBridgeEnabled: true, scievalDatabasePath: databasePath, scievalPollIntervalMs: 100 } });
+    try {
+      const deadline = Date.now() + 5000;
+      while ((await outbox.pending()).length && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50));
+      assert.deepEqual(await outbox.pending(), []);
+      assert.ok(env.daemon.store.getInboundByEvent.get('scieval', event.event_id));
+    } finally { await env.stop(); }
+  });
   it('loads OV timer state using the configured instance and persists MCP changes', async (context) => {
     const server = await fakeOV(context);
     const client = new OVConnection({ url: server.url, user: 'alice' });

@@ -13,8 +13,20 @@ const adapter = await createLocalSciEvalAdapter({
 await adapter.drain(); // caller controls scheduling and retries
 ```
 
-The adapter is disabled by default; this API does not start a background worker or change daemon startup. Each pending/ack call launches the standard-library Python bridge with `execFile` (no shell); JSON is passed through stdin/stdout. A missing database is an error, not an empty newly created database. Process timeout and output limits can be configured with `timeoutMs` and `maxBuffer`. The full pending batch must fit the output limit; increase it or reduce backlog if necessary.
+The adapter is disabled by default; the manual API does not start a background worker. The separate daemon opt-in below starts polling. Each pending/ack call launches the standard-library Python bridge with `execFile` (no shell); JSON is passed through stdin/stdout. A missing database is an error, not an empty newly created database. Process timeout and output limits can be configured with `timeoutMs` and `maxBuffer`. The full pending batch must fit the output limit; increase it or reduce backlog if necessary.
 
 For each event the harness is invoked and the matching unfiltered Runtime ledger record and payload are checked before the P1 acknowledgement is committed. A failed process, filtered event, collision, or failed acknowledgement stops the drain and leaves the event pending. After a crash between ledger insertion and source acknowledgement, replay keeps the same event ID and the Runtime ledger deduplicates it. P1 outbox events have no occurrence timestamps, so `occurred_at` is the ingestion attempt time.
 
 Ledger acceptance does not mean agent processing or external delivery completed. This local integration does not establish authenticated identity, distributed exactly-once delivery, automatic polling, or real SciEval evaluation; those require separate integration work. Treat the database and bridge configuration as privileged: callers with acknowledgement access can mark source events delivered.
+
+## Daemon lifecycle
+
+The daemon can poll the same local outbox when explicitly enabled:
+
+```sh
+VIKA_SCIEVAL_BRIDGE_ENABLED=true
+VIKA_SCIEVAL_DATABASE_PATH=/absolute/path/to/p1.sqlite
+VIKA_SCIEVAL_POLL_INTERVAL_MS=5000
+```
+
+The bridge is disabled by default. Set these environment variables on the daemon process; the database path must be absolute and the bundled Python bridge and Python 3 must be available locally. Polling starts after the Runtime and connector subscriptions are ready. Failed drains are logged and retried after the interval (100–3600000 ms, default 5000); only one drain runs at a time. Shutdown cancels the next poll and waits for the current event to finish before stopping the harness and closing the ledger. Remaining events are retried on the next start.
