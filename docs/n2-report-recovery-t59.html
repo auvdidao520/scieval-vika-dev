@@ -1,0 +1,14 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>SciEval × Vika：报告恢复阶段</title><style>body{font:16px/1.75 system-ui,sans-serif;color:#172d3b;max-width:1050px;margin:36px auto;padding:0 22px}h1,h2{color:#184d63}.card{background:#edf6f8;padding:16px;border-radius:9px}.warn{background:#fff2d9;padding:16px;border-radius:9px}table{border-collapse:collapse;width:100%}td,th{border:1px solid #b9cdd3;padding:9px;text-align:left;vertical-align:top}pre{background:#142d3b;color:#eef9fa;padding:18px;overflow:auto;border-radius:9px}</style></head><body><h1>报告恢复与 Worker 投递意图</h1><p>阶段记录 · 2026-11-12 · 基线 <code>5a77cce</code> · 分支 <code>scieval/next-stage-t59</code></p><div class="card"><strong>本阶段结果：</strong>评测事件漏投时可以查询当前评测恢复报告；报告校验、状态变更和待投递意图一起存入 OV 单个文档，重启后可重新读取。投递后由调用方确认，重复报告不会生成第二条意图。</div><h2>代码执行流程</h2><pre>Worker 绑定 task → 快照 + 提交意图 → 幂等提交 → evaluating
+                                             │
+                事件漏投 / 重启 ──→ 按 evaluation_id 主动查询
+                                             │
+                         pending ──→ 保持状态，稍后再查
+                         已完成  ──→ 必须包含稳定 report_id
+                                             ↓
+                        验证 job / 轮次 / 哈希 / 评测 ID / rubric / 13 项
+                                             ↓
+                         同次写入：报告 + 状态 + 待投递意图
+                                             ↓
+                  调用方读取待投递 → 目标系统持久路由 → 显式确认
+                         ↑                              │
+                         └──── 未确认时重启后重试 ──────┘</pre><h2>具体变更</h2><table><tr><th>文件</th><th>行为</th><th>失败处理</th></tr><tr><td>worker_loop.py</td><td>增加主动查询、持久投递意图、待投递读取和确认；对报告正文中的 report_id 交叉检查。</td><td>报告缺少稳定 ID、身份不匹配、错误任务确认均拒绝；等待中不推进。</td></tr><tr><td>tests/test_worker_loop.py</td><td>模拟漏事件、等待、无 ID、恢复、重启读取、重复报告、错误任务确认与重复确认。</td><td>测试使用模拟 OV 和评分器，不代表服务联调。</td></tr><tr><td>README.md</td><td>写明调用顺序和恢复边界。</td><td>没有把本地意图 ID 冒充 Vika inbox trigger_id。</td></tr></table><h2>验证和错误</h2><p>运行 <code>python3 -m unittest discover -s tests -v</code>：16 项通过。新增测试检查无稳定 report_id 时抛出 <code>completed report requires stable report_id</code>，错误 task 确认抛出 <code>unknown report delivery or task mismatch</code>。这些是预期拒绝，不是线上报错。本阶段未运行 Vika 全量测试。生成本报告时曾因当前目录错误遇到 <code>docs/n2-report-recovery-t59.html: No such file or directory</code>，切换至仓库根目录后已解决。</p><h2>边界与后续</h2><div class="warn">尚未接通 Vika task_create / task_route 和 inbox，也未完成真实 Worker 两轮、真实 OV / SciEval 联调。Vika task_route 要求可信 inbox 事件引用；本阶段意图 ID 不能直接充当 trigger_id。目标路由成功后、确认前崩溃会重试，目标侧需要去重或对账，不能声称恰好一次。旧状态已处理报告不会自动补投。业务评分与审批规则尚未确认，不能自动发布。</div><p>下一步应实现可信事件与目标 task 的绑定和可恢复路由，并处理创建 task 后崩溃对账；再补证据定位、停滞/回归/预算策略和审批绑定。分类、评分阈值、权限与真实测试环境需业务确认，但不妨碍本地开发。</p></body></html>
