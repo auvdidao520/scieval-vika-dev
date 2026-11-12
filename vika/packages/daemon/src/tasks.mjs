@@ -323,6 +323,7 @@ export class TaskManager {
     const task = this.get(taskId);
     if (!task) throw new Error(`no task ${taskId}`);
     if (task.status === 'stopped') throw new Error(`${taskId} was stopped; create a new task instead`);
+    if (task.status === 'reserved') throw new Error('reserved task cannot receive routed inputs');
     if (!['owner', 'context'].includes(role)) throw new Error('invalid input role');
     if (!rows.length || rows.some((row) => !Number.isSafeInteger(row.seq))) throw new Error('accepted input sequence required');
     let added = false;
@@ -425,7 +426,7 @@ export class TaskManager {
   // A task with a turn running needs nothing more: what was routed to it
   // meanwhile is still undelivered when the turn ends (afterTurn).
   request(taskId) {
-    if (this.stopped || this.pending.includes(taskId) || this.running.has(taskId)) return;
+    if (this.stopped || this.get(taskId)?.status === 'reserved' || this.pending.includes(taskId) || this.running.has(taskId)) return;
     this.pending.push(taskId);
     this.pump();
   }
@@ -440,7 +441,7 @@ export class TaskManager {
       if (index < 0) return;
       const [taskId] = this.pending.splice(index, 1);
       const task = this.get(taskId);
-      if (!task || task.status === 'stopped') continue;
+      if (!task || task.status === 'stopped' || task.status === 'reserved') continue;
       void this.runTurn(task, { reserved: normal >= this.slots });
     }
   }
