@@ -39,6 +39,11 @@ function withRoleFile(body, callback) {
 }
 
 describe('conversation policy assemble', () => {
+  it('includes SciEval inbound rules only for configured instances', () => {
+    assert.match(assembleConversationPolicy({ connectors: ['lark', 'scieval'] }), /^## SciEval$/m);
+    assert.doesNotMatch(assembleConversationPolicy({ connectors: ['lark'] }), /^## SciEval$/m);
+  });
+
   it('assembles one Core for every connector set, with a section per connector in use', () => {
     const order = ['## Lark', '## Slack', '## Weixin', '## Telegram', '## QQ', '## Email'];
     for (const connectors of [['lark'], ['weixin'], ['telegram', 'email'], ['slack'], ['qq'], ['qq', 'email'], ['slack', 'qq'], ['lark', 'slack', 'weixin', 'telegram', 'qq', 'email']]) {

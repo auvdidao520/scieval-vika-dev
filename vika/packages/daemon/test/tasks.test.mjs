@@ -63,6 +63,25 @@ function setup(t, options = {}) {
 }
 
 describe('TaskManager', () => {
+  it('routes accepted inputs idempotently, including retries after a worker finishes', async (t) => {
+    const { tasks, db, executor } = setup(t);
+    tasks.create({ rows: [row()], title: 'X', runtime: 'pi' });
+    const event = row({ content: 'evaluation completed' });
+    tasks.route('t1', [event, event], 'owner');
+    tasks.route('t1', [event], 'owner');
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM task_inputs WHERE task_id = ? AND seq = ?').get('t1', event.seq).n, 1);
+    assert.throws(() => tasks.route('t1', [row(), event], 'context'), /different role/);
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM task_inputs WHERE task_id = ?').get('t1').n, 2, 'conflicting batch rolls back');
+    tasks.check('t1');
+    executor.turns[0].finish({ text: 'done' });
+    await settle();
+    assert.equal(tasks.get('t1').status, 'done');
+    tasks.route('t1', [event], 'owner');
+    assert.equal(executor.turns.length, 1);
+    assert.equal(tasks.get('t1').status, 'done');
+    assert.throws(() => tasks.route('t1', [{ seq: null }], 'owner'), /sequence required/);
+  });
+
   it('does not leave a runnable task with a partially recorded request', (t) => {
     const { tasks, db, executor } = setup(t);
     db.exec("CREATE TRIGGER fail_input BEFORE INSERT ON task_inputs WHEN NEW.text LIKE '%FAIL_INPUT%' BEGIN SELECT RAISE(ABORT, 'injected input failure'); END;");
