@@ -25,3 +25,7 @@
 `reconcile_report` 对仍在 evaluating 的作业查询当前 evaluation ID，等待中保持原状；完成后要求服务返回稳定 `report_id`，并复用完整报告校验。`apply_report` 在同一次 OV 文档更新中保存报告、状态及面向绑定 task 的投递意图；`pending_report_deliveries` 可在进程重启后取回，调用方只有在确认目标系统已持久化路由后才可调用 `acknowledge_report_delivery`。重复报告不会产生第二条意图；相同 ID 的不同正文会被拒绝。
 
 这是待接线的单机接口，不会自行调用 Vika `task_route`。该接口要求可信 inbox 事件引用，不能把这里生成的 event_id 当作 Vika 的 trigger_id。发送与确认之间发生崩溃时会重试，因此目标侧必须按稳定事件标识去重或先对账；否则不能宣称恰好一次。服务失败和未提供稳定 report_id 时不会推进作业，需由调用方记录和处理错误。已有历史作业在引入该功能前处理的报告不会自动补出投递意图。
+
+### 可信事件投递对账原型
+
+`trusted_delivery.deliver_pending` 规定可信网关的查找和路由边界，校验已接收报告与持久投递意图后确认。当前没有生产网关或调度接线，不能仅靠此函数接收真实事件；调用方必须从 Core 账本读取并验证指定 connector 实例，按任务和已接受序号幂等路由。查询得到报告但找不到已接受事件时保持待处理，不伪造 trigger ID。详情见 `docs/n4-trusted-delivery-t61.html`。
