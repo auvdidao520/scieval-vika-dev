@@ -39,6 +39,16 @@ describe('configuration safety', { concurrency: false }, () => {
     }
   });
 
+  it('keeps the SciEval bridge disabled unless explicitly enabled', () => {
+    setEnv('VIKA_SCIEVAL_BRIDGE_ENABLED', undefined);
+    setEnv('VIKA_SCIEVAL_DATABASE_PATH', undefined);
+    assert.equal(getConfig().scievalBridgeEnabled, false);
+    setEnv('VIKA_SCIEVAL_BRIDGE_ENABLED', 'true');
+    setEnv('VIKA_SCIEVAL_DATABASE_PATH', '/tmp/p1.db');
+    assert.equal(getConfig().scievalBridgeEnabled, true);
+    assert.equal(getConfig().scievalDatabasePath, '/tmp/p1.db');
+  });
+
   it('defaults timer storage to OV and accepts only OV or SQLite', () => {
     setEnv('VIKA_TIMER_STORAGE', undefined);
     assert.equal(getConfig().timerStorage, 'ov');
