@@ -46,3 +46,19 @@ const page = await resources.read({ uri: 'viking://resources/project/notes.md', 
 ```
 
 Only canonical resource URIs at or below the selected root are accepted; pagination is bounded. The root check is a caller convenience, not a security boundary: OpenViking's own authentication and authorization remain authoritative. The read API returns formatted, untrusted text and can truncate long lines. It is unsuitable for immutable artifacts, binary files, approval or integrity checks. A missing resource, unavailable service or invalid credentials is an error, not an empty result. The project resource root and an actual kanban service contract still need to be identified before live P1 synchronization can be implemented.
+
+## Manual approval-gated OV submission (experimental)
+
+`scieval-vika-p0/ov_publish.py` submits the exact locally approved artifact bytes through Vika's OV connection. It requires an explicitly selected canonical project resource root, an absolute OV config path, and an injected real authorizer for `publish`; the included synthetic authorizer is for demonstrations only. It is not enabled or scheduled by the daemon. Example from a trusted local Python process (with `scieval-vika-p0` on `PYTHONPATH`):
+
+```python
+from foundations import Foundations
+from ov_publish import OVPublisher, NodeOVTransport
+f = Foundations('/absolute/path/to/p1.sqlite', authorizer=production_authorizer)
+p = OVPublisher(f, 'viking://resources/explicit-project-root', NodeOVTransport('/absolute/path/to/instance-ov.json'))
+result = p.submit(job_id, approved_revision, publish_credential)
+```
+
+The adapter verifies authorization, approval, revision, approved artifact version/digest and report digest inside one SQLite write transaction. It saves an attempt with a random child target before calling the local Node subprocess, which uses the existing OV temporary upload and resource import APIs. The result means the asynchronous import was **accepted**, not completed, and the job remains `approved`. OV may transform imported content; this does not establish byte-for-byte stored integrity. SQLite, code, configuration and the subprocess interface are trusted; the subprocess is not an independently authenticated publication API. OV permissions remain authoritative. Keep the selected root dedicated to this purpose; random targets reduce collisions but OV `to` is a replacing operation and this is not an atomic create-only guarantee.
+
+Any error or crash after recording the attempt leaves `attempting`, including cases where OV may have accepted the request. Accepted and uncertain attempts both prevent another submission for that job. There is no automatic retry or reconciliation API: an operator must inspect the recorded target and OV task and decide how to recover; do not delete the record just to retry. The adapter does not mark the job published, verify remote completion, or implement distributed exactly-once delivery. A real project root, production authorizer, OV integration and recovery workflow remain unverified.
