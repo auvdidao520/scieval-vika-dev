@@ -31,3 +31,9 @@
 `trusted_delivery.deliver_pending` 规定可信网关的查找和路由边界，校验已接收报告与持久投递意图后确认。当前没有生产网关或调度接线，不能仅靠此函数接收真实事件；调用方必须从 Core 账本读取并验证指定 connector 实例，按任务和已接受序号幂等路由。查询得到报告但找不到已接受事件时保持待处理，不伪造 trigger ID。详情见 `docs/n4-trusted-delivery-t61.html`。
 
 `task_recovery.recover_task_binding` 是创建后绑定恢复的编排原型：先通过可信网关幂等预留且不启动任务，再保存绑定，最后幂等激活。网关尚未实现，不能接入生产；须由网关原子预留、验证已接受的原始事件并在绑定前阻止 worker 运行。详见 `docs/n5-task-binding-t62.html`。
+
+### Recovery driver prototype
+
+`RecoveryRegistry` is a local SQLite, append-only index of `(job_id, origin_seq)` pairs. A trusted ingress must durably authenticate and accept the origin before calling `register`, and register before creating workflow state. Re-registering the same pair is safe; a different origin for the same job is rejected. Keep the database durable and back it up with the accepted-event ledger. A missing workflow remains visible as a scheduler error and needs replay by ingress. This index cannot itself prove that every accepted event was registered: ingress must replay its ledger to close a crash between acceptance and registration. It also does not validate source identity.
+
+`RecoveryScheduler` scans explicitly, isolating per-job errors and retrying binding, submission, polling, and pending report delivery. Importing it does not start a thread. Its gateway is an interface only: production requires a trusted gateway that validates the accepted ledger, atomically reserves a unique inactive task, and activates only the persisted matching binding, plus a Vika execution gate. Neither the gateway nor the Vika integration exists here; do not connect this prototype to automatic production execution. OV remains single-host/single-writer, and the registry database must be on a local filesystem shared by its writers. Coordinate scheduler shutdown before closing the registry.
