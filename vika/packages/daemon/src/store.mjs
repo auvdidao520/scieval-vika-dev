@@ -1711,9 +1711,11 @@ export class Store {
   prune(retentionMs, now = Date.now()) {
     const cutoff = now - retentionMs;
     const removed = this.transaction(() => {
+      // DONE rows are durable authorization and retry evidence, including origins
+      // that may be reserved after cleanup. No safe expiry watermark exists yet.
       const inbound = this.db.prepare(`
         DELETE FROM connector_events
-        WHERE received_at_ms < ?
+        WHERE received_at_ms < ? AND status != 'DONE'
       `).run(cutoff);
       const meeting = this.meetings.prune(cutoff);
       const outbox = this.db.prepare(`

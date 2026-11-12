@@ -70,7 +70,9 @@ test('reservation, activation and accepted report survive daemon crashes at comm
   const insertEvent = (d, e) => d.prepare(`INSERT INTO connector_events(seq,connector_instance,event_id,kind,subject_type,subject_id,scope_key,event_json,source,sender_id,content,mentions_json,create_time_ms,received_at_ms,status) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(...e);
   let p = await boot();
   let d = db();
-  insertEvent(d, [1,'lark','e1','message','chat','chat','scope',JSON.stringify({connector:'lark',instance:'lark',id:'e1',kind:'message',occurred_at:1,subject:{type:'chat',id:'chat'},content:{text:'request'}}),'lark','owner','request','[]',Date.now(),Date.now(),'DONE']); d.close();
+  insertEvent(d, [1,'lark','e1','message','chat','chat','scope',JSON.stringify({connector:'lark',instance:'lark',id:'e1',kind:'message',occurred_at:1,subject:{type:'chat',id:'chat'},content:{text:'request'}}),'lark','owner','request','[]',1,1,'DONE']); d.close();
+  await crash(p);
+  p = await boot();
   const reserve = {method:'reserve',job_id:'job1',origin_seq:1};
   const response = await call(reserve); assert.equal(response.ok, true, JSON.stringify(p.output())); const reserved = response.result; assert.ok(reserved.task_id);
   await crash(p);
@@ -88,7 +90,9 @@ test('reservation, activation and accepted report survive daemon crashes at comm
   const digest = createHash('sha256').update(JSON.stringify(Object.fromEntries(Object.entries(report).sort()))).digest('hex');
   fs.writeFileSync(stateFile, JSON.stringify({schema_version:2,job_id:'job1',state:'received',task_id:reserved.task_id,outbox:[{kind:'evaluation_report',job_id:'job1',task_id:reserved.task_id,report_id:'r1',round:1,report,report_sha256:digest}]}));
   const event = {id:'evaluation.completed:r1',connector:'scieval',instance:'scieval',kind:'evaluation.completed',occurred_at:2,subject:{type:'scieval_job',id:'job1'},content:{text:JSON.stringify(report)}};
-  d = db(); insertEvent(d, [2,'scieval',event.id,event.kind,'scieval_job','job1','scope',JSON.stringify(event),'scieval',null,JSON.stringify(report),'[]',Date.now(),Date.now(),'DONE']); d.close();
+  d = db(); insertEvent(d, [2,'scieval',event.id,event.kind,'scieval_job','job1','scope',JSON.stringify(event),'scieval',null,JSON.stringify(report),'[]',1,1,'DONE']); d.close();
+  await crash(p);
+  p = await boot();
   assert.equal((await call({method:'accepted_scieval',report_id:'r1'})).result.length, 1);
   fs.writeFileSync(path.join(root,'crash-before-request'), '');
   const route = {method:'route_accepted',job_id:'job1',task_id:reserved.task_id,seq:2};
