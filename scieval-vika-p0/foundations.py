@@ -10,6 +10,7 @@ import uuid
 from contextlib import contextmanager
 
 from framework import Conflict, Store
+from identity import AuthenticatedReviewerProvider
 
 
 def digest(data):
@@ -17,7 +18,7 @@ def digest(data):
 
 
 class Foundations:
-    def __init__(self, path, authorizer=None):
+    def __init__(self, path, authorizer: AuthenticatedReviewerProvider | None = None):
         self.authorizer = authorizer
         self.store = Store(path)
         self.db = self.store.db
