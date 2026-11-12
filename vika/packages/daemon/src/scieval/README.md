@@ -1,14 +1,20 @@
 # SciEval P1 Runtime adapter
 
-This opt-in adapter converts the P1 `JobStore` outbox transition payload to a Vika connector event. It does not start automatically, read credentials, make network calls, poll, or change daemon wiring. Integrators must supply a trusted local bridge exposing asynchronous `pending()` and `acknowledge(eventId)` methods matching the Python `JobStore` semantics, and explicitly call `drain()`.
+This explicitly invoked local bridge connects an existing P1 SQLite outbox to the Vika Runtime event ledger. Python 3 and Node 22.19+ are required. No external credentials or network access are used at runtime. The database and bridge paths must be trusted local paths; run under an account permitted to read and update the P1 database.
 
 ```js
-const adapter = createSciEvalAdapter({
+import { createLocalSciEvalAdapter } from './scieval/adapter.mjs';
+const adapter = await createLocalSciEvalAdapter({
   enabled: true,
-  outbox: localP1Bridge,
-  submit: harnessSubmitter(harness, harness.store),
+  databasePath: '/absolute/path/to/p1.sqlite',
+  harness, store, // the actual Vika harness and its matching persistent store
+  // python: 'python3', bridgePath: '/absolute/path/to/outbox_bridge.py',
 });
-await adapter.drain();
+await adapter.drain(); // caller controls scheduling and retries
 ```
 
-`harnessSubmitter` requires the actual harness and its matching store. It verifies the event is present in the Runtime's persistent ledger, is not filtered, and has the expected payload before acknowledging the source. The harness itself does not report durable acceptance. Replays keep the P1 event ID, so Runtime deduplicates a crash between ingestion and acknowledgement. A failed or filtered event stops the drain and stays pending. The P1 outbox does not have occurrence timestamps; `occurred_at` is the ingestion attempt time. No external delivery, completion of agent processing, authenticated identity, or distributed exactly-once guarantee is implied by ledger acceptance. The local P1 bridge and startup integration remain to be implemented and tested against real services.
+The adapter is disabled by default; this API does not start a background worker or change daemon startup. Each pending/ack call launches the standard-library Python bridge with `execFile` (no shell); JSON is passed through stdin/stdout. A missing database is an error, not an empty newly created database. Process timeout and output limits can be configured with `timeoutMs` and `maxBuffer`. The full pending batch must fit the output limit; increase it or reduce backlog if necessary.
+
+For each event the harness is invoked and the matching unfiltered Runtime ledger record and payload are checked before the P1 acknowledgement is committed. A failed process, filtered event, collision, or failed acknowledgement stops the drain and leaves the event pending. After a crash between ledger insertion and source acknowledgement, replay keeps the same event ID and the Runtime ledger deduplicates it. P1 outbox events have no occurrence timestamps, so `occurred_at` is the ingestion attempt time.
+
+Ledger acceptance does not mean agent processing or external delivery completed. This local integration does not establish authenticated identity, distributed exactly-once delivery, automatic polling, or real SciEval evaluation; those require separate integration work. Treat the database and bridge configuration as privileged: callers with acknowledgement access can mark source events delivered.

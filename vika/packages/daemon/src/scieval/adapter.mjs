@@ -75,3 +75,10 @@ export function createSciEvalAdapter({ enabled = false, outbox, submit, now = Da
     } finally { running = false; }
   } };
 }
+
+// Manual integration point: callers decide when to drain; no background worker.
+export async function createLocalSciEvalAdapter({ enabled = false, harness, store, ...options } = {}) {
+  if (enabled !== true) return createSciEvalAdapter();
+  const { createLocalOutbox } = await import('./local-outbox.mjs');
+  return createSciEvalAdapter({ enabled: true, outbox: createLocalOutbox(options), submit: harnessSubmitter(harness, store) });
+}

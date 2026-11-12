@@ -23,3 +23,19 @@ jobs:
       - name: Run synthetic unit and end-to-end tests
         working-directory: scieval-vika-p0
         run: python -m unittest discover -s tests -v
+
+  runtime-adapter:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Runtime dependencies
+        working-directory: vika
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Test local bridge and Runtime adapter
+        run: node --test vika/packages/daemon/test/scieval-adapter.test.mjs vika/packages/daemon/test/scieval-local-outbox.test.mjs
