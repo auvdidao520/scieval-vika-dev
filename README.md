@@ -2,6 +2,8 @@
 
 本仓库用于开发 Vika 与 SciEval 的教学设计改稿闭环。设计基线见 [闭环架构 HTML](docs/scieval-vika-closed-loop-architecture.html)。
 
+入站 Connector 的服务端契约、配置和恢复边界见 [SciEval Connector 联调说明](docs/scieval-connector.md)。
+
 Vika 源码在 `vika/`，基线为 [OpenViking PR #7227 的 b8c290c 提交](https://github.com/volcengine/OpenViking/pull/7227/commits/b8c290cbd61add49642db807f2030acdf9dcd4e3)。上游许可与声明见 [Vika LICENSE](vika/LICENSE)。
 
 ## 本地开发
