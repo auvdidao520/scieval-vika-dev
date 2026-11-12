@@ -40,7 +40,24 @@ export function createValidators({ grants, rootUri, ovBin = 'ov', readState }) {
 }
 
 // socketDir must be private to the daemon user. No model-facing access.
-export async function startReservationGateway({ tasks, socketDir, grants, rootUri, ovBin, readState }) {
+// The helper locks the inherited open file description. The daemon keeps its
+// descriptor open until activation commits, including if the helper exits.
+export function withJobLock(lockDir, job, fn) {
+  if (!idPattern.test(job)) throw new Error('invalid job');
+  const dir = fs.lstatSync(lockDir);
+  if (!dir.isDirectory() || dir.uid !== process.getuid() || (dir.mode & 0o077)) throw new Error('lock directory must be private');
+  const fd = fs.openSync(path.join(lockDir, `${job}.lock`), fs.constants.O_CREAT | fs.constants.O_RDWR | fs.constants.O_NOFOLLOW, 0o600);
+  try {
+    const stat = fs.fstatSync(fd);
+    if (!stat.isFile() || stat.uid !== process.getuid() || (stat.mode & 0o077) || stat.nlink !== 1) throw new Error('invalid lock file');
+    const result = spawnSync('python3', ['-c', 'import fcntl; fcntl.flock(3, fcntl.LOCK_EX)'], { stdio: ['ignore', 'ignore', 'pipe', fd], timeout: 10000 });
+    if (result.error || result.status !== 0) throw new Error('lock unavailable');
+    return fn();
+  } finally { fs.closeSync(fd); }
+}
+
+export async function startReservationGateway({ tasks, socketDir, lockDir, grants, rootUri, ovBin, readState }) {
+  if (!lockDir) throw new Error('shared OV lock directory required');
   const stat = fs.lstatSync(socketDir);
   if (!stat.isDirectory() || stat.uid !== process.getuid() || (stat.mode & 0o077)) throw new Error('socket directory must be owned by daemon user and private');
   const socketPath = path.join(socketDir, 'reservations.sock');
@@ -67,7 +84,7 @@ export async function startReservationGateway({ tasks, socketDir, grants, rootUr
         let result;
         if (request.method === 'reserve' && Object.keys(request).sort().join(',') === 'job_id,method,origin_seq') result = reservations.reserve(request.job_id, request.origin_seq);
         else if (request.method === 'activate' && Object.keys(request).sort().join(',') === 'job_id,method,origin_seq,task_id') {
-          reservations.activate(request.job_id, request.origin_seq, request.task_id);
+          withJobLock(lockDir, request.job_id, () => reservations.activate(request.job_id, request.origin_seq, request.task_id));
           result = { job_id: request.job_id, origin_seq: request.origin_seq, task_id: request.task_id };
         } else throw new Error('unknown request');
         socket.end(JSON.stringify({ ok: true, result }) + '\n');
