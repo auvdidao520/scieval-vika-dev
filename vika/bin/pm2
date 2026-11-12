@@ -1,0 +1,10 @@
+#!/bin/sh
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# SPDX-License-Identifier: AGPL-3.0
+
+# The release's pinned pm2, run by the release's own Node when it has one
+# (an installed release ships node/; a source checkout uses the node on PATH).
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+NODE="$ROOT/node/bin/node"
+[ -x "$NODE" ] || NODE=node
+exec "$NODE" "$ROOT/node_modules/pm2/bin/pm2" "$@"

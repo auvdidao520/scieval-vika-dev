@@ -1,0 +1,11 @@
+.env
+*.log
+.DS_Store
+data/
+agent/.tmp/
+coverage/
+node_modules/
+.loopy/
+dist/
+bin/slack
+bin/slack.LICENSE

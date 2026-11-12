@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; worker-src 'none'; manifest-src 'none'; media-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+    >
+    <meta name="color-scheme" content="light dark">
+    <title>Agent Activity</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2032%2032'%3E%3Crect%20width='32'%20height='32'%20rx='8'%20fill='%232f6fdb'/%3E%3Cpath%20d='M6%2017h5l3-7%204%2013%203-6h5'%20fill='none'%20stroke='%23fff'%20stroke-width='2.6'%20stroke-linecap='round'%20stroke-linejoin='round'/%3E%3C/svg%3E">
+    <link rel="stylesheet" href="/activity.css">
+    <script src="/activity.js" defer></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <select id="instance-select" aria-label="选择 Agent" disabled>
+        <option>正在读取</option>
+      </select>
+      <div class="session-picker" role="group" aria-label="选择会话">
+        <button id="session-prev" type="button" title="更早的会话 ([)" disabled>‹</button>
+        <select id="session-select" aria-label="选择会话" disabled>
+          <option>正在读取</option>
+        </select>
+        <button id="session-next" type="button" title="更新的会话 (])" disabled>›</button>
+      </div>
+      <span id="live" class="live" role="status" aria-live="polite">
+        <span class="dot" aria-hidden="true"></span>
+        <span id="live-text">正在连接</span>
+      </span>
+      <button id="privacy-toggle" class="quiet" type="button" aria-pressed="false" title="模糊正文 (P)">隐藏正文</button>
+    </header>
+
+    <section id="strip" class="strip" aria-label="时间带：每段为一轮，点击跳转">
+      <div class="strip-labels" aria-hidden="true">
+        <span class="lb-in">收</span><span>回合</span><span class="lb-out">回</span>
+      </div>
+      <div class="strip-main">
+        <div id="strip-track" class="strip-track"></div>
+        <div id="strip-axis" class="strip-axis"></div>
+      </div>
+    </section>
+
+    <div class="split">
+      <main id="feed" class="feed" aria-label="上下文">
+        <button id="load-older" class="quiet older" type="button" hidden>加载更早</button>
+        <div id="entries"></div>
+        <p id="empty" class="empty">正在读取活动…</p>
+      </main>
+      <aside class="side" aria-label="运行状态与系统事件">
+        <h2>运行状态</h2>
+        <dl id="stats" class="stats"></dl>
+        <h2>系统事件</h2>
+        <ol id="system" class="system"></ol>
+      </aside>
+    </div>
+
+    <button id="follow-live" class="follow" type="button" hidden>↓ 最新</button>
+    <div id="notice" class="notice" role="alert" hidden></div>
+  </body>
+</html>

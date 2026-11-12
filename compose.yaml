@@ -1,0 +1,17 @@
+name: scieval-vika-dev
+services:
+  vika-dev:
+    image: node:24.21.0-bookworm
+    working_dir: /project/vika
+    environment:
+      VIKA_WORKSPACE: /dev-workspace
+      VIKA_DATA_DIR: /dev-state
+    volumes:
+      - ./vika:/project/vika
+      - dependencies:/project/vika/node_modules
+      - ./workspace:/dev-workspace
+      - state:/dev-state
+    command: ["npm", "test"]
+volumes:
+  dependencies:
+  state:

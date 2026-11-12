@@ -1,0 +1,207 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>scieval + vika 评测改稿闭环 · 架构设计</title><style>
+:root{color-scheme:dark;--bg:#0b1120;--panel:#141e31;--line:#30415d;--text:#edf3ff;--muted:#adbed7;--green:#6ae6bd;--blue:#80b5ff;--amber:#e5bd7d;--red:#f0918f;--purple:#c3a6ff}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:16px/1.7 system-ui,'Microsoft YaHei',sans-serif}main{max-width:1680px;margin:auto;padding:42px 48px}header{display:flex;align-items:flex-start;justify-content:space-between;gap:40px}h1{font-size:42px;line-height:1.2;margin:10px 0 18px}h2{font-size:26px;margin:0 0 20px}h3{margin:0 0 10px;font-size:19px}p{margin:8px 0;color:var(--muted)}.eyebrow{color:var(--green);font-size:13px;letter-spacing:3px}.badge{padding:7px 13px;border:1px solid var(--line);border-radius:30px;font-size:13px;color:var(--muted);display:inline-block;margin:3px}nav{display:flex;gap:10px;margin:30px 0;flex-wrap:wrap}button.tabbtn{font:inherit;color:var(--text);background:var(--panel);border:1px solid var(--line);border-radius:10px;cursor:pointer;padding:10px 20px}button.tabbtn:hover,button.tabbtn.active{border-color:var(--green);color:var(--green)}section{margin:26px 0;padding:28px;background:var(--panel);border:1px solid var(--line);border-radius:18px}.hidden{display:none}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}.grid2{display:grid;grid-template-columns:repeat(2,1fr);gap:18px}.card{background:#0e1729;border:1px solid var(--line);border-radius:12px;padding:22px}.card b{color:var(--green)}.node{cursor:pointer;text-align:left;padding:20px 16px;min-height:180px;background:#0e1729;border:1px solid var(--line);border-radius:14px;color:var(--text);font:inherit}.node:hover{border-color:var(--green)}.node strong{display:block;font-size:19px;margin:10px 0}.node small{display:block;color:var(--muted);font-size:13.5px;line-height:1.8}.node .eyebrow{display:block}.arrow{align-self:center;color:var(--green);text-align:center;font-size:24px;font-weight:700}.diagram{display:grid;grid-template-columns:1.1fr 34px 1fr 34px 1.2fr 34px 1.3fr 34px 1.15fr;align-items:stretch;gap:4px}#detail{margin-top:18px;padding:18px 22px;background:#1b2c42;border-radius:10px;min-height:90px}.note{border-left:3px solid var(--amber);padding:12px 18px;margin:18px 0;color:#e3cba6;background:#242330;border-radius:0 10px 10px 0}.note.red{border-color:var(--red);background:#2a2026;color:#e8b9b8}table{border-collapse:collapse;width:100%;font-size:15px}th,td{text-align:left;padding:13px 14px;border-bottom:1px solid var(--line);vertical-align:top}th{color:var(--green)}code{font:14px ui-monospace,Consolas,monospace;color:#9fd4ff;overflow-wrap:anywhere}.steps{counter-reset:step;display:grid;grid-template-columns:repeat(4,1fr);gap:16px}.step{padding:20px;border:1px solid var(--line);border-radius:12px;background:#0e1729;position:relative}.step:before{counter-increment:step;content:'0' counter(step);display:block;font-size:26px;color:var(--green);margin-bottom:8px;font-weight:700}.flowline{font-size:19px;color:var(--green);padding:16px 18px;background:#0b1723;border-radius:10px;overflow-wrap:anywhere}li{margin:8px 0;color:var(--muted)}footer{font-size:13px;color:var(--muted);padding:15px 0}.pill{display:inline-block;padding:3px 10px;border-radius:20px;font-size:12.5px;border:1px solid var(--line);margin:2px}.pill.g{color:var(--green);border-color:var(--green)}.pill.a{color:var(--amber);border-color:var(--amber)}.pill.r{color:var(--red);border-color:var(--red)}.pill.p{color:var(--purple);border-color:var(--purple)}
+/* 状态机 */
+.sm{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin:10px 0}.sm .state{padding:14px 18px;border-radius:12px;border:2px solid var(--blue);background:#0e1729;min-width:130px;text-align:center}.sm .state b{display:block;font-size:16px}.sm .state span{font-size:12.5px;color:var(--muted)}.sm .state.edit{border-color:var(--purple)}.sm .state.run{border-color:var(--green)}.sm .state.wait{border-color:var(--amber)}.sm .state.ok{border-color:var(--green);background:#10241d}.sm .state.bad{border-color:var(--red);background:#2a1a1e}.sm .tr{color:var(--green);font-size:20px;font-weight:700}.sm .tr small{display:block;color:var(--muted);font-size:11.5px;font-weight:400;max-width:110px;line-height:1.4}
+/* 闭环图 */
+.loop{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;align-items:stretch}.loop .lcard{background:#0e1729;border:1px solid var(--line);border-radius:12px;padding:16px;position:relative}.loop .lcard h4{margin:0 0 8px;font-size:16px;color:var(--green)}.loop .lcard p{font-size:13px;margin:4px 0}.loopback{margin-top:14px;padding:14px 18px;border:1px dashed var(--amber);border-radius:12px;color:var(--amber);font-size:15px;text-align:center}
+.phase{border-left:3px solid var(--blue);padding-left:18px;margin:16px 0}.phase h3{color:var(--blue)}.phase.p1{border-color:var(--green)}.phase.p1 h3{color:var(--green)}.phase.p2{border-color:var(--amber)}.phase.p2 h3{color:var(--amber)}.phase.p3{border-color:var(--purple)}.phase.p3 h3{color:var(--purple)}
+@media(max-width:1100px){main{padding:24px}header{display:block}.diagram{grid-template-columns:1fr 1fr}.arrow{display:none}.grid,.grid2,.steps,.loop{grid-template-columns:1fr}h1{font-size:30px}}
+@media print{nav,.print{display:none}.hidden{display:block}body{background:white;color:#111}section,.card,.step,.node,.lcard{break-inside:avoid;background:white;color:#111}p,li,footer,td,th{color:#333}main{padding:0}.arrow{display:none}.diagram{grid-template-columns:repeat(3,1fr)}}
+</style><main><header><div><div class="eyebrow">SCIEVAL × OPENVIKING / VIKA</div><h1>教学设计自动改稿与评测闭环架构</h1><p>教师与 IM 触发需求，Vika 改 HTML 课件，自建 scieval 按 13 项 EQuIP 准则评测，结构化反馈驱动多轮修改直至达标。</p></div><div><span class="badge">宽屏单文件 · 2026-11-12</span><br><span class="badge">状态机在 OV 侧 · 课件为 HTML</span><br><button class="print" onclick="window.print()" style="margin-top:8px;font:inherit;color:var(--text);background:var(--panel);border:1px solid var(--line);border-radius:10px;cursor:pointer;padding:10px 20px">打印 / 保存 PDF</button></div></header>
+<nav aria-label="章节">
+<button class="tabbtn active" data-tab="t1">01 整体架构</button>
+<button class="tabbtn" data-tab="t2">02 组件职责</button>
+<button class="tabbtn" data-tab="t3">03 数据流与闭环</button>
+<button class="tabbtn" data-tab="t4">04 OV 状态机</button>
+<button class="tabbtn" data-tab="t5">05 技术选型</button>
+<button class="tabbtn" data-tab="t6">06 停机与幂等</button>
+<button class="tabbtn" data-tab="t7">07 P0–P3 计划</button>
+</nav>
+
+<!-- 01 整体架构 -->
+<div id="t1" class="tab">
+<section><h2>一条主链路：教师/IM → Vika → Runtime → OV 状态机 → HTML 课件 → scieval → 反馈闭环</h2>
+<div class="diagram">
+<button class="node" data-detail="d-teacher"><span class="eyebrow">ENTRY</span><strong>教师 / IM</strong><small>飞书等 IM 下发教学设计与修改要求<br>审批卡片做人工卡口<br>接收每轮产物与报告</small></button><div class="arrow">→</div>
+<button class="node" data-detail="d-vika"><span class="eyebrow">CONTROL</span><strong>Vika Core</strong><small>Connector 收事件、去重<br>会话与 Runtime 生命周期<br>Outbox 统一出站、权限与幂等键</small></button><div class="arrow">→</div>
+<button class="node" data-detail="d-runtime"><span class="eyebrow">EXECUTION</span><strong>Agent Runtime</strong><small>Pi / Codex 等运行时<br>workspace 内 bash/read/write/edit<br>直接生成与修改 HTML 课件</small></button><div class="arrow">⇄</div>
+<button class="node" data-detail="d-ov"><span class="eyebrow">STATE</span><strong>OpenViking</strong><small>kanban 持有迭代状态机<br>skill 存 EQuIP 评分规范与改稿规范<br>资源目录存产物版本与报告</small></button><div class="arrow">→</div>
+<button class="node" data-detail="d-scieval"><span class="eyebrow">EVAL</span><strong>scieval 评测引擎（自建）</strong><small>规则 + LLM 混合评分<br>13 项 EQuIP 维度结构化输出<br>证据定位到页/段落，回写 OV</small></button>
+</div>
+<div id="detail" aria-live="polite"><strong>点击图中的模块</strong><p>查看职责说明。状态不放在 Vika 内，Vika 只负责执行；轮次状态全部落在 OV kanban，崩溃或换 Runtime 都能续跑。</p></div>
+<div class="note">SciEval-Benchmark/SciEval 本身只是数据集加 rubric（273 份课程材料、3549 条带证据人工评分，数据邮件申请，CC BY 4.0），仓库无 API/服务端代码。评测引擎必须自建，bench 提供评分标准与校准样本。</div>
+</section>
+<section><h2>设计基线（已确认的关键决策）</h2>
+<div class="grid">
+<div class="card"><h3>状态机放 OV 侧</h3><p>kanban/资源目录存轮次状态，每次转换带产物版本号和报告 id。Vika 无状态执行，崩溃后状态不丢，换 runtime 可续跑。</p></div>
+<div class="card"><h3>课件用 HTML，不用真 PPT</h3><p>write/edit 直接生成，绕开 python-pptx 的版式、动画、SmartArt 风险。评测对象是内容对教学指标与教师要求的符合度，不是版式还原度。</p></div>
+<div class="card"><h3>评测用规则 + LLM 混合</h3><p>先做关键词/结构检查，再让模型按 13 项 EQuIP rubric 打分。成本低、可解释；拿到 3549 条人工评分后做 few-shot 校准，暂不微调。</p></div>
+</div>
+</section>
+</div>
+
+<!-- 02 组件职责 -->
+<div id="t2" class="tab hidden">
+<section><h2>各组件做什么、不做什么</h2>
+<table><thead><tr><th>组件</th><th>职责</th><th>边界与限制</th></tr></thead><tbody>
+<tr><td><b>教师 / IM</b></td><td>提交教学设计与多因素反馈、在审批卡片确认改稿与发布、查看每轮 HTML 与评测报告</td><td>不直接写 daemon socket 或数据库，所有动作走 Connector 与 outbox</td></tr>
+<tr><td><b>Connector</b><br>（POC 用 email connector）</td><td>收取 IM/邮件事件，归一为 EVENT 信封；worker 独立重连、按事件 id 去重；scieval 结果 POC 阶段走专用邮箱 IMAP 轮询</td><td>新增正式 scieval Connector 需改 config.mjs 白名单与 connectors/catalog.mjs MANIFESTS，非纯插件</td></tr>
+<tr><td><b>Vika Core / Daemon</b></td><td>事件记录与去重、Runtime 调度、动作权限与 decision 新鲜度校验、Outbox 幂等投递、活动账本（SQLite）</td><td>http-api 只监听本机且只读，scieval 无法直接 HTTP 推进来；不含迭代状态机，只有单轮 loop breaker</td></tr>
+<tr><td><b>Agent Runtime</b></td><td>模型推理与工具循环；在 workspace 用 read/write/edit 改 HTML、bash 调 scieval 提交脚本与 timer 轮询；pi-durable 有 SQLite 检查点</td><td>21 个固定工具无文档/PPT 专用能力；bash 多步副作用不能假设安全重放</td></tr>
+<tr><td><b>OpenViking</b></td><td>kanban 状态机（轮次与状态转换）、skill 放 EQuIP 13 项准则与改稿规范、资源目录按 job_id+round 存不可变产物与报告、跨会话记忆</td><td>decision 新鲜度按 subject 隔离，防止按过期报告改稿</td></tr>
+<tr><td><b>scieval 引擎（自建）</b></td><td>13 维 EQuIP 评分：规则层做结构/关键词检查，LLM 层按锚点打分；输出维度分 + 证据引用 + 页/段落定位 + 改进建议 + 报告 id</td><td>bench 仓库只提供 rubric 骨架和申请制数据集，不提供执行能力；重复评测的分数稳定性需实测并加容差</td></tr>
+<tr><td><b>审批机制</b></td><td>agent 起草、教师在飞书卡片确认后才执行改稿发布，作为人审卡口；P1 全量人工确认</td><td>无人值守仅在 P3 按维度分级放开</td></tr>
+</tbody></table>
+</section>
+<section><h2>为什么状态不放 Vika 里</h2>
+<div class="grid2">
+<div class="card"><h3>崩溃恢复</h3><p>Vika 进程或 Runtime 崩溃后，轮次状态、产物版本、报告 id 仍在 OV。新实例从 kanban 读到当前状态与待办，对照 workspace 实际文件后续做，不依赖内存推理现场。</p></div>
+<div class="card"><h3>可换 Runtime</h3><p>Pi、Codex、Claude Code 的会话恢复能力不同。状态外置后，编排语义不绑定任何一个运行时，切换运行时只影响执行手段，不影响闭环判定。</p></div>
+</div>
+</section>
+</div>
+
+<!-- 03 数据流 -->
+<div id="t3" class="tab hidden">
+<section><h2>一轮迭代的完整数据流</h2>
+<div class="loop">
+<div class="lcard"><h4>① 需求进入</h4><p>教师在 IM 发教学设计、要求与多因素反馈；Connector 归一事件进 Core，建 job 与 subject</p></div>
+<div class="lcard"><h4>② 状态建档</h4><p>OV kanban 建卡，状态置 <code>pending_edit</code>，写入 job_id、教师要求、评价指标与轮次上限</p></div>
+<div class="lcard"><h4>③ 改稿执行</h4><p>Runtime 取卡与 skill 规范，workspace 内生成/修改 HTML，产物按 <code>job_id+round</code> 存不可变版本并记内容哈希</p></div>
+<div class="lcard"><h4>④ 提交评测</h4><p>状态转 <code>submitted</code>；提交动作声明为 action 走 outbox，带幂等键；POC 经邮件/脚本提交 scieval</p></div>
+<div class="lcard"><h4>⑤ 评测回写</h4><p>scieval 输出 13 维结构化报告；timer/邮件轮询拿到后写入 OV 资源目录并关联报告 id，状态转 <code>evaluating→need_revision/done</code></p></div>
+<div class="lcard"><h4>⑥ 反馈再改</h4><p>未达标则带着结构化反馈回到 ③，轮次 +1；达标、触顶或停滞则转 done/failed 并通知教师</p></div>
+</div>
+<div class="loopback">↺ 反馈闭环：结构化报告（维度分 + 证据 + 页/段落定位 + 优先级 + 建议）是下一轮改稿的唯一输入；只有自然语言总分会导致多轮抖动不收敛</div>
+</section>
+<section><h2>三条出站/入站通道</h2>
+<table><thead><tr><th>通道</th><th>机制</th><th>保证</th></tr></thead><tbody>
+<tr><td>消息类（通知、审批、报告投递）</td><td>ActionService Outbox + idempotency_key</td><td>权限校验、decision 新鲜度、重复发送去重</td></tr>
+<tr><td>评测提交与结果（POC）</td><td>专用邮箱 + 现成 email connector，bash 调提交脚本，create_timer 周期轮询</td><td>零 Core 改造验证闭环语义；事件按 id 去重</td></tr>
+<tr><td>评测提交与结果（产品化）</td><td>新建 scieval Connector，长轮询订阅 <code>evaluation.completed</code> 类非聊天事件进 harness</td><td>复用 Core 的重连、去重、幂等，提交产物走 outbox</td></tr>
+</tbody></table>
+<div class="note red">禁止外部系统直接写 daemon 的 socket 或 SQLite，会绕过 outbox 与权限边界。评测报告和课件原文按不可信内容处理：workspace 专用、凭据最小化、危险 bash 走人工批准，防提示注入。</div>
+</section>
+</div>
+
+<!-- 04 状态机 -->
+<div id="t4" class="tab hidden">
+<section><h2>OV kanban 状态机：pending_edit 到 done / failed</h2>
+<div class="sm">
+<div class="state edit"><b>pending_edit</b><span>待改稿，新 job 或反馈到达</span></div><div class="tr">→<small>领取任务</small></div>
+<div class="state run"><b>editing</b><span>Runtime 正在改 HTML</span></div><div class="tr">→<small>产物落盘+哈希</small></div>
+<div class="state wait"><b>submitted</b><span>已提交 scieval，带幂等键</span></div><div class="tr">→<small>轮询取报告</small></div>
+<div class="state run"><b>evaluating</b><span>报告回写 OV，判分中</span></div><div class="tr">→<small>判定</small></div>
+<div class="state ok"><b>done</b><span>达标停机，通知教师</span></div>
+</div>
+<div class="sm">
+<div class="state wait"><b>need_revision</b><span>有未达标维度，带报告 id 回到 pending_edit</span></div><div class="tr">↩<small>轮次+1</small></div>
+<div class="state bad"><b>failed</b><span>触顶/停滞/回归/预算耗尽，转人工</span></div>
+</div>
+<div class="note">每次状态转换都带产物版本号与报告 id，可完整回放"哪一版课件、依据哪份报告、改了什么"。need_revision 回到 pending_edit 形成循环，循环出口只有 done 或 failed。</div>
+</section>
+<section><h2>状态转换表</h2>
+<table><thead><tr><th>从</th><th>到</th><th>触发条件</th><th>落库内容</th></tr></thead><tbody>
+<tr><td><code>pending_edit</code></td><td><code>editing</code></td><td>Runtime 领取 kanban 卡</td><td>领取者、时间、轮次</td></tr>
+<tr><td><code>editing</code></td><td><code>submitted</code></td><td>HTML 产物写入不可变目录且哈希记录完成</td><td>版本号、内容哈希、幂等键</td></tr>
+<tr><td><code>submitted</code></td><td><code>evaluating</code></td><td>轮询/事件确认 scieval 已受理</td><td>评测受理 id</td></tr>
+<tr><td><code>evaluating</code></td><td><code>need_revision</code></td><td>存在未达标维度且未触停机条件</td><td>报告 id、维度分、问题项与定位</td></tr>
+<tr><td><code>evaluating</code></td><td><code>done</code></td><td>EQuIP 维度达标率满足阈值，教师确认（P1）</td><td>最终版本、最终报告</td></tr>
+<tr><td>任意活动态</td><td><code>failed</code></td><td>迭代上限、停滞、回归或预算耗尽</td><td>失败原因、当前版本、转人工标记</td></tr>
+<tr><td><code>need_revision</code></td><td><code>pending_edit</code></td><td>反馈结构化校验通过</td><td>轮次 +1、关联报告 id</td></tr>
+</tbody></table>
+</section>
+</div>
+
+<!-- 05 技术选型 -->
+<div id="t5" class="tab hidden">
+<section><h2>scieval 评分骨架：13 项 EQuIP 准则</h2>
+<table><thead><tr><th>维度</th><th>准则代码与名称</th></tr></thead><tbody>
+<tr><td rowspan="5"><b>Ⅰ 学习设计</b></td><td><code>I.A</code> 现象解释 / 方案设计</td></tr>
+<tr><td><code>I.B.1</code> 科学与工程实践</td></tr>
+<tr><td><code>I.B.2</code> 学科核心概念</td></tr>
+<tr><td><code>I.B.3</code> 跨学科概念</td></tr>
+<tr><td><code>I.C</code> 三维整合</td></tr>
+<tr><td rowspan="3"><b>Ⅱ 教学支持</b></td><td><code>II.A</code> 相关性与真实性</td></tr>
+<tr><td><code>II.B</code> 学生想法</td></tr>
+<tr><td><code>II.C</code> 科学准确性</td></tr>
+<tr><td rowspan="5"><b>Ⅲ 学生进展监测</b></td><td><code>III.A</code> 三维表现监测</td></tr>
+<tr><td><code>III.B</code> 形成性评价</td></tr>
+<tr><td><code>III.C</code> 评分指导</td></tr>
+<tr><td><code>III.D</code> 无偏任务</td></tr>
+<tr><td><code>III.E</code> 学习机会</td></tr>
+</tbody></table>
+<p>每个维度输出：维度分、证据片段、问题定位（页/段落）、改进建议、优先级。申请到的 3549 条人工评分用于 few-shot 与评分锚点校准。</p>
+</section>
+<section><h2>关键技术选择</h2>
+<div class="grid">
+<div class="card"><h3>规则 + LLM 混合评分</h3><p>规则层先做关键词、结构、必备要素检查，确定性高、可解释；LLM 层按 rubric 锚点对开放性维度打分。先不微调，数据到位后再评估。</p></div>
+<div class="card"><h3>HTML 课件</h3><p>Vika write/edit 原生生成，单文件自包含、可直接在 IM 与浏览器预览；版本 diff 清晰，内容符合度作为主评测对象。</p></div>
+<div class="card"><h3>email connector POC</h3><p>scieval 结果发专用邮箱，复用现成 IMAP 轮询模板，零 Core 改造先验证闭环语义；验证通过再产品化为正式 Connector。</p></div>
+<div class="card"><h3>OV kanban 状态机</h3><p>状态外置、版本与报告关联，崩溃可恢复、Runtime 可替换；skill 承载评分与改稿规范，资源目录存不可变产物。</p></div>
+<div class="card"><h3>Outbox + 幂等键</h3><p>消息与提交类远端操作统一出站，带权限、decision 新鲜度校验和 idempotency_key；文件操作另做哈希级状态核对。</p></div>
+<div class="card"><h3>多实例隔离</h3><p>一个 Core 只有一个共享会话，多教师多作业用独立 dataDir/workspace/OV 配置的多实例，或按 subject 严格隔离，防上下文串扰。</p></div>
+</div>
+<div class="note">合规：Connector 0.2 仍在 schema 变更期、durable host 版本精确 pin，二开有跟随升级成本；AGPLv3 下做成面向学校的网络服务有源码披露义务，上线前过法务。</div>
+</section>
+</div>
+
+<!-- 06 停机与幂等 -->
+<div id="t6" class="tab hidden">
+<section><h2>停机条件硬写进编排层，不靠提示词</h2>
+<table><thead><tr><th>判据</th><th>规则</th><th>出口</th></tr></thead><tbody>
+<tr><td>达标停机</td><td>EQuIP 维度达标率达到阈值（主判据，HTML 渲染效果仅次要检查）</td><td><span class="pill g">done</span></td></tr>
+<tr><td>迭代上限</td><td>建议 ≤ 5 轮，超限不再自动改</td><td><span class="pill r">failed → 人工</span></td></tr>
+<tr><td>停滞停机</td><td>连续两轮无改善（考虑重复评测非确定性，加分数容差）</td><td><span class="pill r">failed → 人工</span></td></tr>
+<tr><td>回归停机</td><td>已达标维度在新一轮掉分</td><td><span class="pill r">failed → 人工</span></td></tr>
+<tr><td>预算停机</td><td>token / 时长 / 评测配额耗尽</td><td><span class="pill a">挂起或 failed</span></td></tr>
+</tbody></table>
+</section>
+<section><h2>幂等与崩溃恢复：三个提交边界分开处理</h2>
+<div class="grid">
+<div class="card"><h3>输入层</h3><p>稳定事件 id，先持久化可恢复记录再确认接收；重投相同 id 去重，区分"已接收"和"已处理"。</p></div>
+<div class="card"><h3>模型状态层</h3><p>恢复已落盘的消息、工具调用与结果，已完成工具结果直接复用；重新推理可能生成不同调用 ID 的同一操作，不能只按 tool-call id 去重。</p></div>
+<div class="card"><h3>操作副作用层</h3><p>执行前记录稳定操作 id、参数与前置条件，执行后记结果；结果不明时先核对实际效果再决定是否重做。</p></div>
+</div>
+<table style="margin-top:18px"><thead><tr><th>操作类型</th><th>恢复方式</th></tr></thead><tbody>
+<tr><td>HTML 文件 edit</td><td>记录修改前后哈希；已是目标状态就跳过，仍是原状态才修改，其他状态报冲突</td></tr>
+<tr><td>产物版本</td><td>按 <code>job_id+round</code> 存不可变版本，提交带内容哈希与幂等键，天然去重</td></tr>
+<tr><td>评测提交 / 消息发送</td><td>走 outbox 幂等键，重试前查已有结果与报告 id</td></tr>
+<tr><td>任意 bash 多步操作</td><td>不通用安全重放；效果无法核实时暂停并转人工核查，确保旧 Worker 与遗留子进程不再写入</td></tr>
+</tbody></table>
+<div class="note red">最难的窗口：操作已生效但成功记录尚未落盘就崩溃。操作日志与文件系统、远端 API 不在同一事务，单加日志表消除不了这个窗口，所以严格恰好一次只限定在支持事务或幂等的操作上。</div>
+</section>
+</div>
+
+<!-- 07 计划 -->
+<div id="t7" class="tab hidden">
+<section><h2>P0–P3 分阶段实施</h2>
+<div class="phase p1"><h3>P0 · 1–2 周 · 契约定调</h3><p>发邮件申请 SciEval 数据集；定 scieval 提交/查询 API、结果 schema（13 维 + 证据 + 定位）、达标阈值与轮次策略；在 OV 建 skill、kanban 规范与产物目录规范；核对 13 项准则与本校教学评价指标的 gap，确定自定义维度。</p></div>
+<div class="phase"><h3>P1 · 2–3 周 · 单教师单作业 POC</h3><p>email connector + timer 轮询；Runtime 用 write/edit 生成 HTML 课件、python 只做辅助；kanban 记轮次跑通 pending_edit → done/failed；全量人工确认；先验证分数能否收敛，实测重复评测稳定性并定容差。</p></div>
+<div class="phase p2"><h3>P2 · 3–5 周 · 产品化 Connector 与状态机固化</h3><p>实现正式 scieval Connector（长轮询非聊天事件）；提交动作全走 outbox 幂等；状态机与停机判据固化在 OV 侧；多实例支持多教师并行；补齐崩溃恢复的哈希核对流程。</p></div>
+<div class="phase p3"><h3>P3 · 分级自治与运营看板</h3><p>按维度风险分级放开无人值守修改；加 token/时长成本看板与评测趋势图；数据集校准充分后评估评分模型微调；沉淀改稿规范回写 skill。</p></div>
+</section>
+<section><h2>scieval 侧待确认四件事（P0 阻塞项）</h2>
+<div class="steps">
+<div class="step"><h3>接入形态</h3><p>自建引擎对外提供 API 还是 webhook，或仅界面/邮件，决定 Connector 形态。</p></div>
+<div class="step"><h3>结构化能力</h3><p>结果能否定位到具体页/段落，而非只有总分，决定闭环能否收敛。</p></div>
+<div class="step"><h3>评测确定性</h3><p>同一产物重复评测的分数波动，决定停滞判据的容差设计。</p></div>
+<div class="step"><h3>时延与配额</h3><p>单次评测时长与调用配额，决定轮询间隔、并行度与预算停机阈值。</p></div>
+</div>
+<div class="note">主要风险优先级：① 反馈不够结构化导致不收敛；② LLM 评分不稳定；③ 提示注入（报告与课件原文不可信）；④ 多教师上下文串扰；⑤ AGPL 合规与二开跟随成本。PPT 风险已由"改 HTML"决策消除。</div>
+</section>
+</div>
+
+<footer>离线单文件 HTML · 内联 CSS/JS，不加载外部脚本、字体或图像 · 架构图全部由 CSS 绘制 · 依据本话题已确认方案与公开 feat/vika、SciEval-Benchmark 资料整理</footer>
+</main>
+<script>
+const details={
+'d-teacher':['教师 / IM','需求入口与人工卡口。教师提交教学设计和多因素反馈，在飞书审批卡片上确认每轮改稿；IM 同时接收 HTML 产物链接与评测报告。任何人都不直接写 daemon 的 socket 或数据库。'],
+'d-vika':['Vika Core / Daemon','管接与送：Connector 收事件并按 id 去重，调度 Runtime 生命周期，对外动作统一走 Outbox，带权限、decision 新鲜度校验和幂等键。它不持有迭代状态，也没有多轮状态机，只有单轮 loop breaker。'],
+'d-runtime':['Agent Runtime','管怎么做：模型在 workspace 内用 read/write/edit 直接生成和修改 HTML 课件，用 bash 调评测提交脚本，create_timer 周期轮询结果。pi-durable 的 SQLite 检查点支持崩溃续跑，但 bash 多步副作用不能假设安全重放。'],
+'d-ov':['OpenViking（状态机所在）','闭环的状态中枢。kanban 卡片承载 pending_edit → done/failed 状态机，skill 存 13 项 EQuIP 评分规范和改稿规范，资源目录按 job_id+round 存不可变产物与报告。状态外置后 Vika 崩溃或换 Runtime 都能续跑。'],
+'d-scieval':['scieval 评测引擎（自建）','SciEval bench 只给 rubric 和数据集，引擎要自建。规则层做结构与关键词检查，LLM 层按 EQuIP 锚点打分，输出 13 维结构化报告：维度分、证据引用、页/段落定位、改进建议、优先级和报告 id，作为下一轮改稿输入。']
+};
+document.querySelectorAll('.tabbtn').forEach(b=>b.addEventListener('click',()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('hidden',x.id!==b.dataset.tab));document.querySelectorAll('.tabbtn').forEach(x=>x.classList.toggle('active',x===b));window.scrollTo({top:0,behavior:'smooth'})}));
+document.querySelectorAll('[data-detail]').forEach(b=>b.addEventListener('click',()=>{let d=details[b.dataset.detail],box=document.getElementById('detail');box.replaceChildren();let h=document.createElement('strong'),p=document.createElement('p');h.textContent=d[0];p.textContent=d[1];box.append(h,p)}));
+</script></html>
