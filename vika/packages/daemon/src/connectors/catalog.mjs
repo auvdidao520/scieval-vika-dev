@@ -101,6 +101,17 @@ const MANIFESTS = Object.freeze({
     auth_schema: EMPTY_SCHEMA,
     config_schema: EMPTY_SCHEMA,
   }),
+  // Inbound evaluation reports only. Workspace orchestration still submits
+  // artifacts; no undeclared submit action or runtime tool is exposed.
+  scieval: connectorManifest({
+    name: 'scieval',
+    version: 'scieval-events-v1',
+    capabilities: ['events'],
+    actions: {},
+    queries: [],
+    auth_schema: EMPTY_SCHEMA,
+    config_schema: EMPTY_SCHEMA,
+  }),
 });
 
 export function getConnectorManifest(id) {
