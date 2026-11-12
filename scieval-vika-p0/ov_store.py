@@ -111,6 +111,45 @@ class OvStore:
         # Preserve the original Store's small public shape for the orchestrator.
         return {key: state[key] for key in ('job_id', 'state', 'revision', 'round')}
 
+    def get_full(self, job_id: str) -> dict:
+        """Return the whole persisted document, including v2 business state."""
+        return self._read(job_id)
+
+    def create_workflow(self, job_id: str, category: dict, plan: dict, rubric_version: str) -> None:
+        from contracts import load_rubrics, validate_category, validate_plan
+        validate_category(category, load_rubrics())
+        if category['needs_teacher_confirmation']:
+            raise ValueError('teacher confirmation required before dispatch')
+        validate_plan(plan, round_number=1)
+        if not isinstance(rubric_version, str) or not rubric_version.strip():
+            raise ValueError('rubric version required')
+        state = {'schema_version': 2, 'job_id': job_id, 'state': 'received',
+                 'revision': 0, 'round': 1, 'category': category,
+                 'rubric_version': rubric_version, 'task_id': None,
+                 'improvement_plan': plan, 'current': None,
+                 'processed_reports': {}, 'outbox': []}
+        with self._lock(job_id):
+            self._write(job_id, state, create=True)
+            if self._read(job_id) != state:
+                raise OvError('OV create read-back verification failed')
+
+    def update_workflow(self, job_id: str, revision: int, update) -> dict:
+        """Apply an internal mutation under the same single-host lock and verify it."""
+        with self._lock(job_id):
+            state = self._read(job_id)
+            if state.get('schema_version') != 2:
+                raise ValueError('workflow schema version 2 required')
+            if state['revision'] != revision:
+                raise Conflict('stale revision')
+            update(state)
+            if state['job_id'] != job_id or state['revision'] != revision:
+                raise ValueError('mutation changed protected fields')
+            state['revision'] += 1
+            self._write(job_id, state)
+            if self._read(job_id) != state:
+                raise OvError('OV workflow read-back verification failed')
+            return state
+
     def transition(self, job_id: str, revision: int, target: str) -> dict:
         with self._lock(job_id):
             state = self._read(job_id)

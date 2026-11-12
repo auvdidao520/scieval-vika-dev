@@ -13,3 +13,9 @@
 `ov_store.py` 用实例的 `ov` CLI 把每个作业写成 `viking://…/<job_id>/state.json`，状态转换和 outbox 在同一 JSON 文档中更新，写入后回读核对。它通过本机 flock 保证单作业单写者，适用于单主机 P0；OV content/write 没有通用 CAS 承诺，不能把该适配器直接用于多主机并发。运行时需设置正确的 `OPENVIKING_CLI_CONFIG_FILE`，并先用 `ov health` 验证连接。
 
 真实飞书、Runtime、SciEval 和 OV 联调仍需部署环境。测试中的 HTTP 服务和 OV runner 都是本机测试替身，不代表已完成外部服务验收。
+
+## 下一阶段工作流原型
+
+`contracts.py` 和 `category_rubrics.yaml` 保存未确认的分类、指标与方案契约。`OvStore.create_workflow` 创建 v2 状态，`worker_loop.py` 提供 task 关联、快照、提交意图、幂等提交、报告校验/去重及按当前评测 ID 查 task 的原型。`scieval-role.md` 为独立实例的自定义 role 草案，SciEval connector 规则只在启用该 connector 时注入。
+
+这些函数尚未接入 Vika 的 task_create/task_route、事件 inbox、人工确认界面或自动改稿；不要在生产实例启用该 role。报告引用定位、停滞/回归/预算判断、分类低置信处理、任务创建后崩溃对账等仍待实现。OV 测试使用本机替身，SciEval 测试使用模拟器；不能据此声称真实 Worker 双轮联调已通过。现有 OV 写锁仅在同机所有写入者使用同一锁目录时有效，不支持多机 CAS。类别映射和轮次仅为路线图草案，正式策略需要业务确认。
