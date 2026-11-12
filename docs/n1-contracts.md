@@ -56,3 +56,7 @@ N2：独立 workers 实例、SciEval role/connector prompt、OV v2 状态读写�
 N3：worker_loop、不可变轮次快照、稳定幂等键提交、报告按 job_id 回到原 task、报告归属与去重、第二轮计划引用第一轮报告。
 
 N4：停滞/回归/轮次/预算、指定 hash 与 report ID 的人工审批、真实 OV/SciEval 隔离联调。保留既有状态机，最终先进入 awaiting_review，不自动发布。
+
+## 后续增量：改稿上下文核对（2026-11-12）
+
+`validate_revision_context(binding, plan, report, *, next_round, expected_job_id, expected_input_sha256)` 将候选绑定、上一轮报告和改稿方案一起核对：绑定 job 必须等于可信 job，报告须属于该 job、上一轮和可信快照摘要，方案须引用报告的 `evaluation_id`。报告同时经过现有 13 项结构校验。必须从可信存储取得期望 job 和快照摘要，不得从待校验报告自身取值。该函数不读取存储、不核实来源、不保证 task 归属、报告唯一或授权，也未接入 Router。报告身份暂以原型的 `evaluation_id` 表达，实际接口的 report ID 语义需要确认。

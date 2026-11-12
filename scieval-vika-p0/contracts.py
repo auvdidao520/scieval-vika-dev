@@ -137,3 +137,28 @@ def category_gate(candidate, config, *, min_confidence=None, policy_confirmed=Fa
         else:
             return {'status': 'ready', 'reason': 'validated_category', 'question': None}
     return {'status': 'needs_confirmation', 'reason': reason, 'question': question}
+
+
+def validate_revision_context(binding, plan, report, *, next_round, expected_job_id, expected_input_sha256):
+    """Check a revision candidate against caller-supplied trusted job and snapshot.
+
+    The caller must obtain the expected identity from authoritative storage. This
+    function neither fetches data nor establishes provenance or authorization.
+    """
+    from framework import validate_report
+
+    validate_task_binding(binding)
+    if not isinstance(expected_job_id, str) or not _IDENTIFIER.fullmatch(expected_job_id):
+        raise ValueError('invalid expected job id')
+    if binding['job_id'] != expected_job_id:
+        raise ValueError('binding job identity mismatch')
+    if type(next_round) is not int or next_round < 2:
+        raise ValueError('revision requires next_round >= 2')
+    if not isinstance(expected_input_sha256, str) or not re.fullmatch(r'[0-9a-f]{64}', expected_input_sha256):
+        raise ValueError('invalid expected input digest')
+    if not isinstance(report, dict):
+        raise ValueError('report must be an object')
+    validate_report(report, job_id=expected_job_id, round_number=next_round - 1,
+                    input_sha256=expected_input_sha256)
+    _text(report['evaluation_id'], 'evaluation_id')
+    validate_plan(plan, round_number=next_round, expected_report_id=report['evaluation_id'])
