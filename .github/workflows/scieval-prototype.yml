@@ -1,0 +1,45 @@
+name: Synthetic prototype CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.10', '3.11', '3.12', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Run synthetic unit and end-to-end tests
+        working-directory: scieval-vika-p0
+        run: python -m unittest discover -s tests -v
+
+  runtime-adapter:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Runtime dependencies
+        working-directory: vika
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Test local bridge and Runtime adapter
+        run: node --test vika/packages/daemon/test/scieval-adapter.test.mjs vika/packages/daemon/test/scieval-local-outbox.test.mjs vika/packages/daemon/test/scieval-scheduler.test.mjs
+      - name: Test SciEval daemon lifecycle recovery
+        run: node --test --test-name-pattern='SciEval' vika/packages/daemon/test/daemon.integration.test.mjs
+      - name: Test SciEval recovery across process death
+        run: node --test vika/packages/daemon/test/scieval-cross-process.test.mjs

@@ -33,6 +33,7 @@ import { OVUnavailableError } from './ov-connection.mjs';
 import { OVRecall } from './ov-recall.mjs';
 import { TimerConnector, TimerRepository } from './timers.mjs';
 import { OVTimerRepository } from './ov-timers.mjs';
+import { createSciEvalScheduler } from './scieval/scheduler.mjs';
 import { updateRuntimePreference } from './runtime-preference.mjs';
 import {
   MeetingPlugin,
@@ -71,6 +72,7 @@ export class PersonalAgentDaemon {
     this.meeting = null;
     this.timers = null;
     this.timerConnector = null;
+    this.scievalScheduler = null;
     this.liveness = null;
     this.roster = null;
     this.chatNames = null;
@@ -442,6 +444,13 @@ export class PersonalAgentDaemon {
         status: 'RUNNING',
       }, 'subscriber-started');
 
+      if (this.config.scievalBridgeEnabled === true) {
+        this.scievalScheduler = await createSciEvalScheduler({
+          databasePath: this.config.scievalDatabasePath, pollIntervalMs: this.config.scievalPollIntervalMs,
+          harness: this.harness, store: this.store, logger: this.logger.child({ component: 'scieval' }),
+        });
+        this.scievalScheduler.start();
+      }
       this.ready = true;
       this.chatNames.refresh();
       this.maintenanceTimer = setInterval(() => this.runMaintenance(), 86_400_000);
@@ -596,6 +605,9 @@ export class PersonalAgentDaemon {
       if (this.maintenanceTimer) clearInterval(this.maintenanceTimer);
       if (this.ovSyncTimer) clearInterval(this.ovSyncTimer);
       this.timerConnector?.stop();
+      try { await this.scievalScheduler?.stop(); } catch (error) {
+        this.logger.warn('scieval_bridge_stop_failed', { error: safeError(error) });
+      }
       this.ovContext?.stop();
       this.maintenanceTimer = null;
       registerNameResolver(null);
