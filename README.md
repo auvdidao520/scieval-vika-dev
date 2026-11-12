@@ -1,5 +1,7 @@
 # SciEval × Vika 教学设计评测闭环
 
+开发版本：`0.2.0-n1.draft.1`（N1 契约草稿；未发布，待 PR 审核）。详见 [N1 契约与验收边界](docs/n1-contracts.md)。
+
 本仓库用于开发 Vika 与 SciEval 的教学设计改稿闭环。设计基线见 [闭环架构 HTML](docs/scieval-vika-closed-loop-architecture.html)。
 
 入站 Connector 的服务端契约、配置和恢复边界见 [SciEval Connector 联调说明](docs/scieval-connector.md)。

@@ -2,6 +2,7 @@
 from __future__ import annotations
 import json
 import math
+import re
 from pathlib import Path
 from framework import CRITERIA
 
@@ -62,7 +63,7 @@ def validate_category(category, config):
         raise ValueError('other requires teacher confirmation')
 
 
-def validate_plan(plan, *, round_number):
+def validate_plan(plan, *, round_number, expected_report_id=None):
     _object(plan, ('plan_id', 'based_on_report_id', 'target_criteria', 'actions', 'preserve'), 'plan')
     _text(plan['plan_id'], 'plan_id')
     if type(round_number) is not int or round_number < 1:
@@ -72,6 +73,10 @@ def validate_plan(plan, *, round_number):
             raise ValueError('initial plan cannot cite a report')
     else:
         _text(plan['based_on_report_id'], 'based_on_report_id')
+    if expected_report_id is not None:
+        _text(expected_report_id, 'expected_report_id')
+        if plan['based_on_report_id'] != expected_report_id:
+            raise ValueError('plan report identity mismatch')
     _texts(plan['target_criteria'], 'target_criteria')
     targets = plan['target_criteria']
     if not targets or len(targets) != len(set(targets)) or not set(targets) <= CRITERIA:
@@ -84,4 +89,51 @@ def validate_plan(plan, *, round_number):
             raise ValueError('invalid action criterion or priority')
         _text(action['change'], 'change')
         _text(action['expected_evidence'], 'expected_evidence')
+    if {action['criterion_id'] for action in plan['actions']} != set(targets):
+        raise ValueError('every target criterion requires an action')
     _texts(plan['preserve'], 'preserve')
+
+
+CONTRACT_VERSION = '0.2.0-n1.draft.1'
+_IDENTIFIER = re.compile(r'[A-Za-z0-9_-]{1,64}')
+
+
+def validate_task_binding(binding):
+    """Validate a proposed mapping only; this does not create or route tasks."""
+    _object(binding, ('schema_version', 'job_id', 'task_id', 'source_event_id'), 'task_binding')
+    if type(binding['schema_version']) is not int or binding['schema_version'] != 1:
+        raise ValueError('unsupported task binding version')
+    for field in ('job_id', 'task_id'):
+        if not isinstance(binding[field], str) or not _IDENTIFIER.fullmatch(binding[field]):
+            raise ValueError(f'{field}: invalid identifier')
+    _text(binding['source_event_id'], 'source_event_id')
+
+
+def category_gate(candidate, config, *, min_confidence=None, policy_confirmed=False):
+    """Gate a model proposal, never infer a teaching category from raw IM.
+
+    No default confidence threshold is invented. Until reviewed policy is supplied,
+    the result is a teacher question. A ready result is not dispatch authorization.
+    """
+    if type(policy_confirmed) is not bool:
+        raise ValueError('policy_confirmed must be boolean')
+    if min_confidence is not None and (
+        type(min_confidence) not in (float, int)
+        or not math.isfinite(min_confidence) or not 0 <= min_confidence <= 1
+    ):
+        raise ValueError('invalid confidence threshold')
+    if candidate is None:
+        reason, question = 'missing_category', '这份教学设计的学科、年级和课型是什么？'
+    else:
+        validate_category(candidate, config)
+        if candidate['category'] == 'other':
+            reason, question = 'other_category', '这份任务属于哪种课型，需要优先改进哪些方面？'
+        elif candidate['needs_teacher_confirmation']:
+            reason, question = 'teacher_confirmation', '请确认本次课型和需要保留的教师要求，是否有跨课型或冲突要求？'
+        elif not policy_confirmed or min_confidence is None:
+            reason, question = 'unconfirmed_policy', '本次采用哪个已确认的课型与低置信处理规则？'
+        elif candidate['confidence'] < min_confidence:
+            reason, question = 'low_confidence', '当前课型判断置信不足，请确认这份教学设计的课型。'
+        else:
+            return {'status': 'ready', 'reason': 'validated_category', 'question': None}
+    return {'status': 'needs_confirmation', 'reason': reason, 'question': question}
