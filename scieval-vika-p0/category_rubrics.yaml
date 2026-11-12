@@ -1,0 +1,11 @@
+{
+ "version":"teaching-category-draft-1",
+ "categories":{
+  "new_lesson":{"required_focus":["I.B.2","I.C","II.A","III.E"],"always_required":["II.C"]},
+  "experiment_inquiry":{"required_focus":["I.A","I.B.1","II.B","III.A"],"always_required":["II.C"]},
+  "review":{"required_focus":["I.B.2","III.B","III.C","III.E"],"always_required":["II.C"]},
+  "project_based":{"required_focus":["I.A","I.B.3","I.C","III.B"],"always_required":["II.C"]},
+  "other":{"required_focus":[],"always_required":["II.C"]}
+ },
+ "stop_policy":{"max_rounds":3,"require_all_criteria_scored":true,"require_teacher_approval":true}
+}
