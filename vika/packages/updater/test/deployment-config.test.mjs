@@ -432,6 +432,27 @@ test('connects mailboxes only together with the email connector, each account fi
 });
 
 
+test('accepts the scieval connector and forwards only non-secret provider settings', () => {
+  const manifest = validManifest();
+  manifest.agents[1].connectors = ['lark', 'scieval'];
+  manifest.env.SCIEVAL_BASE_URL = 'https://scieval.example.edu';
+  manifest.env.SCIEVAL_TOKEN_FILE = '/srv/vika/secrets/scieval.token';
+  manifest.env.SCIEVAL_POLL_INTERVAL_MS = '15000';
+  manifest.env.SCIEVAL_REQUEST_TIMEOUT_MS = '10000';
+  withManifest(manifest, (manifestPath) => {
+    const env = { VIKA_CONFIG: manifestPath };
+    const deployment = loadDeploymentManifest(env);
+    applyDeploymentDaemonEnv(env, deployment);
+    applyDeploymentAgentEnv(env, deployment, 'beta');
+    assert.equal(env.VIKA_CONNECTORS_JSON, '["lark","scieval"]');
+    assert.equal(env.SCIEVAL_BASE_URL, 'https://scieval.example.edu');
+    assert.equal(env.SCIEVAL_TOKEN_FILE, '/srv/vika/secrets/scieval.token');
+    assert.equal(env.SCIEVAL_POLL_INTERVAL_MS, '15000');
+    assert.equal(env.SCIEVAL_REQUEST_TIMEOUT_MS, '10000');
+    assert.equal(env.SCIEVAL_TOKEN, undefined);
+  });
+});
+
 test('OV memory is the daemon\'s; per-line search is opt-in; any OV plugin that loads stays inert; no Lark profile for Weixin', () => {
   const manifest = validManifest();
   manifest.agents[1].ovAutoRecall = true;

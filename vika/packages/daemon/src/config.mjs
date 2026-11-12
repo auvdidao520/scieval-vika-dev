@@ -164,7 +164,7 @@ export function getConfig() {
   const channel = enumEnv('VIKA_CHANNEL', 'lark', ['lark', 'weixin', 'telegram', 'slack', 'qq']);
   const configuredConnectors = jsonStringArrayEnv('VIKA_CONNECTORS_JSON');
   const connectors = configuredConnectors.length > 0 ? [...new Set(configuredConnectors)] : [channel];
-  if (connectors.some((connector) => !['lark', 'weixin', 'email', 'telegram', 'slack', 'qq'].includes(connector))) {
+  if (connectors.some((connector) => !['lark', 'weixin', 'email', 'telegram', 'slack', 'qq', 'scieval'].includes(connector))) {
     throw new Error('VIKA_CONNECTORS_JSON contains an unsupported connector');
   }
   if (!connectors.includes(channel)) {
@@ -195,6 +195,27 @@ export function getConfig() {
   }
   if (parsedVolcBaseUrl.protocol !== 'https:') {
     throw new Error('VIKA_VOLC_BASE_URL must be a valid HTTPS URL');
+  }
+  let scieval = null;
+  if (connectors.includes('scieval')) {
+    const baseUrl = (process.env.SCIEVAL_BASE_URL ?? '').trim().replace(/\/+$/, '');
+    let parsed;
+    try { parsed = new URL(baseUrl); } catch {
+      throw new Error('SCIEVAL_BASE_URL must be an absolute HTTPS URL (HTTP is allowed on loopback)');
+    }
+    const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(parsed.hostname);
+    if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && loopback)) {
+      throw new Error('SCIEVAL_BASE_URL must be an absolute HTTPS URL (HTTP is allowed on loopback)');
+    }
+    if (parsed.username || parsed.password || parsed.search || parsed.hash) {
+      throw new Error('SCIEVAL_BASE_URL must not contain credentials, a query or a fragment');
+    }
+    scieval = Object.freeze({
+      baseUrl,
+      tokenFile: privateRegularFile((process.env.SCIEVAL_TOKEN_FILE ?? '').trim(), 'scieval token file'),
+      pollIntervalMs: intEnv('SCIEVAL_POLL_INTERVAL_MS', 30_000, { min: 5_000, max: 300_000 }),
+      requestTimeoutMs: intEnv('SCIEVAL_REQUEST_TIMEOUT_MS', 20_000, { min: 1_000, max: 120_000 }),
+    });
   }
 
   return {
@@ -228,6 +249,8 @@ export function getConfig() {
     larkCliBin: cliBin(process.env.LARK_CLI_BIN || bundledLarkCli()),
     slackCliBin: cliBin(process.env.SLACK_CLI_BIN || undefined),
     emailAccounts,
+    scieval,
+    scievalGatewayConfigFile: process.env.SCIEVAL_GATEWAY_CONFIG_FILE ? privateRegularFile(process.env.SCIEVAL_GATEWAY_CONFIG_FILE, 'SCIEVAL_GATEWAY_CONFIG_FILE') : null,
     weixinLongPollTimeoutMs: intEnv('VIKA_WEIXIN_LONG_POLL_TIMEOUT_MS', 35_000, {
       min: 5_000,
       max: 120_000,
