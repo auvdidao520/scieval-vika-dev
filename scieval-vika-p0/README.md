@@ -19,3 +19,9 @@
 `contracts.py` 和 `category_rubrics.yaml` 保存未确认的分类、指标与方案契约。`OvStore.create_workflow` 创建 v2 状态，`worker_loop.py` 提供 task 关联、快照、提交意图、幂等提交、报告校验/去重及按当前评测 ID 查 task 的原型。`scieval-role.md` 为独立实例的自定义 role 草案，SciEval connector 规则只在启用该 connector 时注入。
 
 这些函数尚未接入 Vika 的 task_create/task_route、事件 inbox、人工确认界面或自动改稿；不要在生产实例启用该 role。报告引用定位、停滞/回归/预算判断、分类低置信处理、任务创建后崩溃对账等仍待实现。OV 测试使用本机替身，SciEval 测试使用模拟器；不能据此声称真实 Worker 双轮联调已通过。现有 OV 写锁仅在同机所有写入者使用同一锁目录时有效，不支持多机 CAS。类别映射和轮次仅为路线图草案，正式策略需要业务确认。
+
+### 报告恢复与投递意图
+
+`reconcile_report` 对仍在 evaluating 的作业查询当前 evaluation ID，等待中保持原状；完成后要求服务返回稳定 `report_id`，并复用完整报告校验。`apply_report` 在同一次 OV 文档更新中保存报告、状态及面向绑定 task 的投递意图；`pending_report_deliveries` 可在进程重启后取回，调用方只有在确认目标系统已持久化路由后才可调用 `acknowledge_report_delivery`。重复报告不会产生第二条意图；相同 ID 的不同正文会被拒绝。
+
+这是待接线的单机接口，不会自行调用 Vika `task_route`。该接口要求可信 inbox 事件引用，不能把这里生成的 event_id 当作 Vika 的 trigger_id。发送与确认之间发生崩溃时会重试，因此目标侧必须按稳定事件标识去重或先对账；否则不能宣称恰好一次。服务失败和未提供稳定 report_id 时不会推进作业，需由调用方记录和处理错误。已有历史作业在引入该功能前处理的报告不会自动补出投递意图。

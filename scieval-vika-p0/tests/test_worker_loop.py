@@ -5,7 +5,8 @@ from framework import Conflict
 from ov_store import OvStore
 from simulated_evaluator import SimulatedEvaluator
 from test_ov_store import FakeOv
-from worker_loop import apply_report, bind_task, prepare_round, report_route, submit_round
+from worker_loop import (apply_report, bind_task, prepare_round, report_route, submit_round,
+                         reconcile_report, pending_report_deliveries, acknowledge_report_delivery)
 
 class WorkerLoopTests(unittest.TestCase):
     def setUp(self):
@@ -59,3 +60,28 @@ class WorkerLoopTests(unittest.TestCase):
         bind_task(self.store, 'job1', 0, 't1')
         with self.assertRaises(Conflict): bind_task(self.store, 'job1', 1, 't2')
         with self.assertRaises(Conflict): prepare_round(self.store, 'job1', 0, self.root, b'x')
+
+    def test_missed_event_recovery_and_durable_delivery(self):
+        state = bind_task(self.store, 'job1', 0, 't1')
+        prepare_round(self.store, 'job1', state['revision'], self.root, b'<p>x</p>')
+        state = submit_round(self.store, self.evaluator, 'job1')
+        report = {**self.evaluator.query(state['current']['evaluation_id']), 'report_id': 'r1'}
+        class Query:
+            def __init__(self, result): self.result = result
+            def query(self, evaluation_id): return self.result
+        self.assertEqual(reconcile_report(self.store, Query({'status':'running'}), 'job1'), 'pending')
+        with self.assertRaises(ValueError):
+            reconcile_report(self.store, Query({k:v for k,v in report.items() if k != 'report_id'}), 'job1')
+        self.assertEqual(reconcile_report(self.store, Query(report), 'job1'), 'revising')
+        reopened = OvStore('viking://~/resources/scieval/jobs', str(self.root / 'locks'), runner=self.store.runner)
+        events = pending_report_deliveries(reopened, 'job1')
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]['task_id'], 't1')
+        self.assertEqual(apply_report(reopened, 'job1', 'r1', report), 'duplicate')
+        self.assertEqual(len(pending_report_deliveries(reopened, 'job1')), 1)
+        with self.assertRaises(Conflict):
+            acknowledge_report_delivery(reopened, 'job1', events[0]['event_id'], 't2')
+        acknowledge_report_delivery(reopened, 'job1', events[0]['event_id'], 't1')
+        acknowledge_report_delivery(reopened, 'job1', events[0]['event_id'], 't1')
+        self.assertEqual(pending_report_deliveries(reopened, 'job1'), [])
+        with self.assertRaises(ValueError): apply_report(reopened, 'job1', 'different', report)

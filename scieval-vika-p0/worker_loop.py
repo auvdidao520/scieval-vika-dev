@@ -74,6 +74,8 @@ def apply_report(store, job_id, report_id, report):
     """Reject stale/mismatched reports without advancing the job."""
     if not isinstance(report_id, str) or not report_id.strip():
         raise ValueError('report_id required')
+    if isinstance(report, dict) and 'report_id' in report and report['report_id'] != report_id:
+        raise ValueError('report id mismatch')
     encoded = json.dumps(report, sort_keys=True, ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode()
     digest = hashlib.sha256(encoded).hexdigest()
     state = store.get_full(job_id)
@@ -100,8 +102,53 @@ def apply_report(store, job_id, report_id, report):
         s['last_report'] = report
         s['state'] = target
         s['review_reason'] = None if target == 'revising' else ('incomplete' if not complete else 'max_rounds' if decision == 'revise' else decision)
+        # Commit the validated report and its delivery intent together. The
+        # consumer must acknowledge only after durable routing to the task.
+        s['outbox'].append({'event_id': 'report:' + hashlib.sha256(report_id.encode()).hexdigest(),
+                            'kind': 'evaluation_report', 'job_id': job_id,
+                            'task_id': s['task_id'], 'report_id': report_id,
+                            'report_sha256': digest, 'report': report,
+                            'round': s['round'], 'delivered': False})
     store.update_workflow(job_id, state['revision'], mutate)
     return target
+
+
+def reconcile_report(store, evaluator, job_id):
+    """Poll the current evaluation after a missed event; never invent a report ID."""
+    state = store.get_full(job_id)
+    if state['state'] != 'evaluating' or not state.get('current'):
+        raise Conflict('no active evaluation')
+    result = evaluator.query(state['current']['evaluation_id'])
+    if not isinstance(result, dict):
+        raise ValueError('invalid evaluator response')
+    if result.get('status') in ('pending', 'queued', 'running'):
+        return 'pending'
+    if 'report_id' not in result:
+        raise ValueError('completed report requires stable report_id')
+    return apply_report(store, job_id, result['report_id'], result)
+
+
+def pending_report_deliveries(store, job_id):
+    """Return durable report intents, including those from earlier rounds."""
+    return [event for event in store.get_full(job_id).get('outbox', [])
+            if event.get('kind') == 'evaluation_report' and not event.get('delivered')]
+
+
+def acknowledge_report_delivery(store, job_id, event_id, task_id):
+    """Acknowledge an intent after the caller has durably routed it."""
+    state = store.get_full(job_id)
+    matches = [e for e in state.get('outbox', []) if e.get('event_id') == event_id
+               and e.get('kind') == 'evaluation_report']
+    if len(matches) != 1 or matches[0].get('task_id') != task_id:
+        raise Conflict('unknown report delivery or task mismatch')
+    if matches[0].get('delivered'):
+        return state
+    def mutate(s):
+        event = next(e for e in s['outbox'] if e.get('event_id') == event_id)
+        if event.get('task_id') != task_id:
+            raise Conflict('report delivery task changed')
+        event['delivered'] = True
+    return store.update_workflow(job_id, state['revision'], mutate)
 
 
 def report_route(store, job_id, evaluation_id):
