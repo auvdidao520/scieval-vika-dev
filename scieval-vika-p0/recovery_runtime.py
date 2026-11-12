@@ -6,6 +6,7 @@ trusted accepted-event delivery adapter. Importing this module does no work.
 import threading
 from recovery_scheduler import RecoveryScheduler
 from reservation_gateway import ReservationGateway
+from delivery_gateway import DeliveryGateway
 
 
 class _Gateway:
@@ -16,9 +17,9 @@ class _Gateway:
         self.route_accepted = delivery.route_accepted
 
 
-def start_recovery(*, store, registry, evaluator, delivery, socket_path, interval=30):
+def start_recovery(*, store, registry, evaluator, socket_path, delivery=None, interval=30):
     """Start the explicit recovery thread; call stop() before closing dependencies."""
-    gateway = _Gateway(ReservationGateway(socket_path), delivery)
+    gateway = _Gateway(ReservationGateway(socket_path), delivery or DeliveryGateway(socket_path))
     scheduler = RecoveryScheduler(store, gateway, evaluator, registry, interval=interval)
     thread = threading.Thread(target=scheduler.run, name='scieval-recovery', daemon=False)
     thread.start()

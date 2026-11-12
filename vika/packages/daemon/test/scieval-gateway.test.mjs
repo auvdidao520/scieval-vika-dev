@@ -29,8 +29,8 @@ test('private socket reserves then requires persisted OV binding for activation'
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'scieval-gw-'));
   const socketDir = path.join(workspace, 'private'); fs.mkdirSync(socketDir, { mode: 0o700 });
   const db = new DatabaseSync(':memory:');
-  db.exec(`CREATE TABLE connector_events(seq INTEGER PRIMARY KEY, status TEXT, event_id TEXT, connector_instance TEXT, scope_key TEXT, chat_id TEXT, thread_id TEXT, message_id TEXT, chat_type TEXT, source TEXT, sender_id TEXT, content TEXT);
-    INSERT INTO connector_events VALUES(1,'DONE','e1','lark','scope','chat',NULL,'m1','p2p','lark','owner','request');`);
+  db.exec(`CREATE TABLE connector_events(seq INTEGER PRIMARY KEY, status TEXT, event_id TEXT, connector_instance TEXT, scope_key TEXT, chat_id TEXT, thread_id TEXT, message_id TEXT, chat_type TEXT, source TEXT, sender_id TEXT, content TEXT, kind TEXT, subject_type TEXT, subject_id TEXT, event_json TEXT);
+    INSERT INTO connector_events VALUES(1,'DONE','e1','lark','scope','chat',NULL,'m1','p2p','lark','owner','request',NULL,NULL,NULL,NULL);`);
   const inbox = new MessageInbox({db, runtime: {snapshot: () => ({work: {turnInProgress: true}})}});
   let starts = 0, binding = null;
   const tasks = new TaskManager({db, config: {workspace}, executor: {start() { starts++; return {done: new Promise(() => {}), stop() {}}; }}, inbox, lineFor: row => row.content});
@@ -52,5 +52,25 @@ except BlockingIOError: sys.exit(7)`, lockPath]).status;
   tasks.setStatus = (...args) => { assert.equal(probe(), 7, 'competing OvStore writer must be excluded before commit'); return setStatus(...args); };
   assert.equal((await call(activation)).ok, true); assert.equal((await call(activation)).ok, true); assert.equal(starts, 1);
   assert.equal(probe(), 0, 'lock is released after activation');
+  const event = {id:'evaluation.completed:r1', connector:'scieval', instance:'scieval', kind:'evaluation.completed', subject:{type:'scieval_job', id:'job1'}, content:{text:'{}'}};
+  db.prepare('INSERT INTO connector_events(seq,status,event_id,connector_instance,source,content,kind,subject_type,subject_id,event_json) VALUES (?,?,?,?,?,?,?,?,?,?)').run(2,'DONE',event.id,'scieval','scieval','report',event.kind,'scieval_job','job1',JSON.stringify(event));
+  assert.equal((await call({method:'accepted_scieval', report_id:'r1'})).result[0].event.id, event.id);
+  assert.equal((await call({method:'route_accepted',job_id:'job1',task_id:reservation.task_id,seq:2})).ok, true);
+  assert.equal((await call({method:'route_accepted',job_id:'job1',task_id:reservation.task_id,seq:2})).ok, true);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM task_inputs WHERE seq=2').get().n, 1);
+  assert.equal((await call({method:'route_accepted',job_id:'job2',task_id:reservation.task_id,seq:2})).ok, false);
   assert.equal((await call({...req, note: 'untrusted'})).ok, false);
+});
+
+test('gateway close releases the socket for restart and refuses an occupied socket', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'scieval-life-'));
+  const db = new DatabaseSync(':memory:');
+  db.exec('CREATE TABLE tasks(id TEXT PRIMARY KEY)');
+  const options = {tasks:{db}, socketDir:dir, lockDir:dir, grants:[], rootUri:'viking://jobs'};
+  let server = await startReservationGateway(options);
+  t.after(async () => { if (server) await server.close(); db.close(); fs.rmSync(dir, {recursive:true, force:true}); });
+  await assert.rejects(startReservationGateway(options), /socket already exists/);
+  await server.close(); server = null;
+  assert.equal(fs.existsSync(path.join(dir, 'reservations.sock')), false);
+  server = await startReservationGateway(options);
 });

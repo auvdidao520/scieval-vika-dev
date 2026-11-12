@@ -250,6 +250,7 @@ export function getConfig() {
     slackCliBin: cliBin(process.env.SLACK_CLI_BIN || undefined),
     emailAccounts,
     scieval,
+    scievalGatewayConfigFile: process.env.SCIEVAL_GATEWAY_CONFIG_FILE ? privateRegularFile(process.env.SCIEVAL_GATEWAY_CONFIG_FILE, 'SCIEVAL_GATEWAY_CONFIG_FILE') : null,
     weixinLongPollTimeoutMs: intEnv('VIKA_WEIXIN_LONG_POLL_TIMEOUT_MS', 35_000, {
       min: 5_000,
       max: 120_000,

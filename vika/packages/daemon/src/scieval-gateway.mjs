@@ -86,12 +86,28 @@ export async function startReservationGateway({ tasks, socketDir, lockDir, grant
         else if (request.method === 'activate' && Object.keys(request).sort().join(',') === 'job_id,method,origin_seq,task_id') {
           withJobLock(lockDir, request.job_id, () => reservations.activate(request.job_id, request.origin_seq, request.task_id));
           result = { job_id: request.job_id, origin_seq: request.origin_seq, task_id: request.task_id };
+        } else if (request.method === 'accepted_scieval' && Object.keys(request).sort().join(',') === 'method,report_id') {
+          if (typeof request.report_id !== 'string' || !request.report_id || request.report_id.length > 256) throw new Error('invalid report');
+          result = tasks.db.prepare("SELECT seq, status, connector_instance, event_json FROM connector_events WHERE event_id = ? AND status = 'DONE' AND source = 'scieval' AND kind = 'evaluation.completed' ORDER BY seq LIMIT 3")
+            .all('evaluation.completed:' + request.report_id).map(({event_json, ...row}) => ({...row, event: JSON.parse(event_json)}));
+        } else if (request.method === 'route_accepted' && Object.keys(request).sort().join(',') === 'job_id,method,seq,task_id') {
+          if (!idPattern.test(request.job_id) || !Number.isSafeInteger(request.seq) || typeof request.task_id !== 'string') throw new Error('invalid route');
+          const binding = tasks.db.prepare('SELECT * FROM scieval_task_reservations WHERE job_id = ? AND task_id = ?').get(request.job_id, request.task_id);
+          const row = tasks.db.prepare("SELECT * FROM connector_events WHERE seq = ? AND status = 'DONE' AND source = 'scieval' AND kind = 'evaluation.completed' AND subject_type = 'scieval_job' AND subject_id = ?").get(request.seq, request.job_id);
+          if (!binding || !row) throw new Error('route rejected');
+          tasks.route(request.task_id, [row], 'owner');
+          result = { job_id: request.job_id, task_id: request.task_id, seq: request.seq };
         } else throw new Error('unknown request');
-        socket.end(JSON.stringify({ ok: true, result }) + '\n');
+        const response = JSON.stringify({ ok: true, result }) + '\n';
+        if (Buffer.byteLength(response) > 1024 * 1024) throw new Error('response too large');
+        socket.end(response);
       } catch { socket.end(JSON.stringify({ ok: false, error: 'request rejected' }) + '\n'); }
     });
   });
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(socketPath, resolve); });
-  fs.chmodSync(socketPath, 0o600);
+  try { fs.chmodSync(socketPath, 0o600); } catch (error) {
+    await new Promise(resolve => server.close(resolve));
+    throw error;
+  }
   return { socketPath, async close() { for (const client of clients) client.destroy(); await new Promise(resolve => server.close(resolve)); } };
 }
