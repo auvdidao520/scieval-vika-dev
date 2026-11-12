@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 from framework import CRITERIA, Conflict, Store, snapshot, validate_report
 
@@ -11,6 +12,32 @@ class FrameworkTests(unittest.TestCase):
             self.assertEqual(first, snapshot(path, b'hello'))
             with self.assertRaises(Conflict): snapshot(path, b'changed')
             self.assertEqual(path.read_bytes(), b'hello')
+
+    def test_snapshot_failure_does_not_publish_partial_file(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / 'input.html'
+            with patch('framework.os.link', side_effect=OSError('simulated interruption')):
+                with self.assertRaises(OSError):
+                    snapshot(path, b'complete content')
+            self.assertFalse(path.exists())
+            self.assertEqual(list(Path(root).iterdir()), [])
+            snapshot(path, b'complete content')
+            self.assertEqual(path.read_bytes(), b'complete content')
+
+    def test_outbox_ack_is_durable_and_repeatable(self):
+        with tempfile.TemporaryDirectory() as root:
+            dbpath = str(Path(root) / 'jobs.db')
+            store = Store(dbpath)
+            store.create('j')
+            event = store.transition('j', 0, 'preparing')
+            store.acknowledge(event['event_id'])
+            store.acknowledge(event['event_id'])
+            with self.assertRaises(KeyError):
+                store.acknowledge('unknown')
+            store.close()
+            store = Store(dbpath)
+            self.assertEqual(store.pending(), [])
+            store.close()
 
     def test_state_cas_outbox_and_round(self):
         with tempfile.TemporaryDirectory() as root:

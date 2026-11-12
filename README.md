@@ -18,6 +18,8 @@ docker compose run --rm vika-dev npm test
 
 ## 首个开发阶段
 
+独立的模拟评测和本地流程原型见 [原型说明](scieval-vika-p0/README.md)；它尚未接入 Vika 或真实服务。
+
 1. 定义评测请求和报告契约，保留评分证据和页段定位。
 2. 用测试评测器跑通单教师、单作业的改稿状态流。
 3. 实测重复评测稳定性，再接入真实评分引擎与 OpenViking 状态存储。

@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import tempfile
 import sqlite3
 import uuid
 from dataclasses import dataclass
@@ -37,12 +39,21 @@ def snapshot(path: Path, content: bytes) -> Snapshot:
     """Exclusive creation avoids overwriting a round; caller supplies a trusted path."""
     path.parent.mkdir(parents=True, exist_ok=True)
     digest = hashlib.sha256(content).hexdigest()
+    # Publish only a complete file. A crash may leave a temporary file, never a
+    # partially written final artifact; link preserves exclusive creation.
+    fd, temporary = tempfile.mkstemp(prefix='.snapshot-', dir=path.parent)
     try:
-        with path.open('xb') as stream:
+        with os.fdopen(fd, 'wb') as stream:
             stream.write(content)
-    except FileExistsError:
-        if hashlib.sha256(path.read_bytes()).hexdigest() != digest:
-            raise Conflict('round artifact already exists with different content')
+            stream.flush()
+            os.fsync(stream.fileno())
+        try:
+            os.link(temporary, path)
+        except FileExistsError:
+            if hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+                raise Conflict('round artifact already exists with different content')
+    finally:
+        os.unlink(temporary)
     return Snapshot(str(path), digest)
 
 
@@ -98,23 +109,35 @@ class Store:
         return dict(zip(('job_id', 'state', 'revision', 'round'), row))
 
     def transition(self, job_id: str, revision: int, target: str) -> dict:
+        if target in ('approved', 'rejected', 'published'):
+            raise ValueError('use review and publication APIs')
         with self.db:
-            job = self.get(job_id)
-            if job['revision'] != revision:
-                raise Conflict('stale revision')
-            if target not in TRANSITIONS[job['state']]:
-                raise ValueError('invalid transition')
-            # Moving from revising to evaluating starts the next immutable round.
-            next_round = job['round'] + int(job['state'] == 'revising' and target == 'evaluating')
-            changed = self.db.execute('UPDATE jobs SET state=?, revision=revision+1, round=? WHERE job_id=? AND revision=?', (target, next_round, job_id, revision)).rowcount
-            if changed != 1:
-                raise Conflict('stale revision')
-            event = {'event_id': str(uuid.uuid4()), 'job_id': job_id, 'revision': revision + 1, 'from': job['state'], 'to': target, 'round': next_round}
-            self.db.execute('INSERT INTO outbox(event_id, job_id, revision, payload) VALUES (?, ?, ?, ?)', (event['event_id'], job_id, revision + 1, json.dumps(event)))
-            return event
+            return self._transition(job_id, revision, target)
+
+    def _transition(self, job_id: str, revision: int, target: str) -> dict:
+        job = self.get(job_id)
+        if job['revision'] != revision:
+            raise Conflict('stale revision')
+        if target not in TRANSITIONS[job['state']]:
+            raise ValueError('invalid transition')
+        # Moving from revising to evaluating starts the next immutable round.
+        next_round = job['round'] + int(job['state'] == 'revising' and target == 'evaluating')
+        changed = self.db.execute('UPDATE jobs SET state=?, revision=revision+1, round=? WHERE job_id=? AND revision=?', (target, next_round, job_id, revision)).rowcount
+        if changed != 1:
+            raise Conflict('stale revision')
+        event = {'event_id': str(uuid.uuid4()), 'job_id': job_id, 'revision': revision + 1, 'from': job['state'], 'to': target, 'round': next_round}
+        self.db.execute('INSERT INTO outbox(event_id, job_id, revision, payload) VALUES (?, ?, ?, ?)', (event['event_id'], job_id, revision + 1, json.dumps(event)))
+        return event
 
     def pending(self) -> list[dict]:
         return [json.loads(row[0]) for row in self.db.execute('SELECT payload FROM outbox WHERE delivered=0 ORDER BY rowid')]
+
+    def acknowledge(self, event_id: str) -> None:
+        """Record a successful delivery; repeated acknowledgements are harmless."""
+        with self.db:
+            changed = self.db.execute('UPDATE outbox SET delivered=1 WHERE event_id=?', (event_id,)).rowcount
+            if not changed:
+                raise KeyError(event_id)
 
     def close(self) -> None:
         self.db.close()
