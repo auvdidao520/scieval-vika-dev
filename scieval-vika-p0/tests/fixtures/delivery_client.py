@@ -16,7 +16,7 @@ class Store:
         Path(filename).write_text(json.dumps(state)); return state
 if mode == 'init':
     intent = {'kind':'evaluation_report', 'event_id':'intent1', 'job_id':'job1', 'task_id':task, 'report_id':'r1', 'round':1, 'report':report, 'report_sha256':digest, 'delivered':False}
-    Path(filename).write_text(json.dumps({'task_id':task, 'revision':0, 'outbox':[intent]})); sys.exit()
+    Path(filename).write_text(json.dumps({'schema_version':2, 'job_id':'job1', 'task_id':task, 'revision':0, 'outbox':[intent]})); sys.exit()
 store = Store(); gateway = DeliveryGateway(socket)
 if mode == 'tamper':
     state = store.get_full('job1'); state['outbox'][0]['report_sha256'] = '0'*64

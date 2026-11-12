@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { SciEvalReservations } from './scieval-reservations.mjs';
 
 const idPattern = /^[A-Za-z0-9_-]{1,64}$/;
@@ -29,6 +30,7 @@ export function createValidators({ grants, rootUri, ovBin = 'ov', readState }) {
       const grant = byJob.get(job);
       return !!grant && row?.status === 'DONE' && fields.every(k => row[k] === grant[k]);
     },
+    readTrustedState(job) { return reader(job); },
     verifyBinding(job, seq, task) {
       if (!idPattern.test(job) || !Number.isSafeInteger(seq) || seq < 1 || typeof task !== 'string' || !task) return false;
       try {
@@ -61,7 +63,8 @@ export async function startReservationGateway({ tasks, socketDir, lockDir, grant
   const stat = fs.lstatSync(socketDir);
   if (!stat.isDirectory() || stat.uid !== process.getuid() || (stat.mode & 0o077)) throw new Error('socket directory must be owned by daemon user and private');
   const socketPath = path.join(socketDir, 'reservations.sock');
-  if (fs.existsSync(socketPath)) throw new Error('socket already exists');
+  try { fs.lstatSync(socketPath); throw new Error('socket already exists'); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
   const validators = createValidators({ grants, rootUri, ovBin, readState });
   const reservations = new SciEvalReservations({ tasks, ...validators });
   const clients = new Set();
@@ -92,10 +95,19 @@ export async function startReservationGateway({ tasks, socketDir, lockDir, grant
             .all('evaluation.completed:' + request.report_id).map(({event_json, ...row}) => ({...row, event: JSON.parse(event_json)}));
         } else if (request.method === 'route_accepted' && Object.keys(request).sort().join(',') === 'job_id,method,seq,task_id') {
           if (!idPattern.test(request.job_id) || !Number.isSafeInteger(request.seq) || typeof request.task_id !== 'string') throw new Error('invalid route');
-          const binding = tasks.db.prepare('SELECT * FROM scieval_task_reservations WHERE job_id = ? AND task_id = ?').get(request.job_id, request.task_id);
-          const row = tasks.db.prepare("SELECT * FROM connector_events WHERE seq = ? AND status = 'DONE' AND source = 'scieval' AND kind = 'evaluation.completed' AND subject_type = 'scieval_job' AND subject_id = ?").get(request.seq, request.job_id);
-          if (!binding || !row) throw new Error('route rejected');
-          tasks.route(request.task_id, [row], 'owner');
+          withJobLock(lockDir, request.job_id, () => {
+            const binding = tasks.db.prepare('SELECT * FROM scieval_task_reservations WHERE job_id = ? AND task_id = ?').get(request.job_id, request.task_id);
+            const row = tasks.db.prepare("SELECT * FROM connector_events WHERE seq = ? AND status = 'DONE' AND source = 'scieval' AND kind = 'evaluation.completed' AND subject_type = 'scieval_job' AND subject_id = ?").get(request.seq, request.job_id);
+            if (!binding || !row) throw new Error('route rejected');
+            const duplicates = tasks.db.prepare("SELECT count(*) AS n FROM connector_events WHERE event_id = ? AND status = 'DONE' AND source = 'scieval' AND kind = 'evaluation.completed'").get(row.event_id);
+            if (duplicates.n !== 1) throw new Error('ambiguous event');
+            const state = validators.readTrustedState(request.job_id);
+            const check = spawnSync('python3', ['-I', fileURLToPath(new URL('./scieval-verify-report.py', import.meta.url))], {
+              input: JSON.stringify({ state, row, job: request.job_id, task: request.task_id }), timeout: 10000, maxBuffer: 1024 * 1024,
+            });
+            if (check.error || check.status !== 0) throw new Error('report rejected');
+            tasks.route(request.task_id, [row], 'owner');
+          });
           result = { job_id: request.job_id, task_id: request.task_id, seq: request.seq };
         } else throw new Error('unknown request');
         const response = JSON.stringify({ ok: true, result }) + '\n';
@@ -105,7 +117,11 @@ export async function startReservationGateway({ tasks, socketDir, lockDir, grant
     });
   });
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(socketPath, resolve); });
-  try { fs.chmodSync(socketPath, 0o600); } catch (error) {
+  try {
+    fs.chmodSync(socketPath, 0o600);
+    const socketStat = fs.lstatSync(socketPath);
+    if (!socketStat.isSocket() || socketStat.uid !== process.getuid() || (socketStat.mode & 0o777) !== 0o600) throw new Error('invalid socket permissions');
+  } catch (error) {
     await new Promise(resolve => server.close(resolve));
     throw error;
   }

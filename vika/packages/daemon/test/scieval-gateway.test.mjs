@@ -55,9 +55,8 @@ except BlockingIOError: sys.exit(7)`, lockPath]).status;
   const event = {id:'evaluation.completed:r1', connector:'scieval', instance:'scieval', kind:'evaluation.completed', subject:{type:'scieval_job', id:'job1'}, content:{text:'{}'}};
   db.prepare('INSERT INTO connector_events(seq,status,event_id,connector_instance,source,content,kind,subject_type,subject_id,event_json) VALUES (?,?,?,?,?,?,?,?,?,?)').run(2,'DONE',event.id,'scieval','scieval','report',event.kind,'scieval_job','job1',JSON.stringify(event));
   assert.equal((await call({method:'accepted_scieval', report_id:'r1'})).result[0].event.id, event.id);
-  assert.equal((await call({method:'route_accepted',job_id:'job1',task_id:reservation.task_id,seq:2})).ok, true);
-  assert.equal((await call({method:'route_accepted',job_id:'job1',task_id:reservation.task_id,seq:2})).ok, true);
-  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM task_inputs WHERE seq=2').get().n, 1);
+  assert.equal((await call({method:'route_accepted',job_id:'job1',task_id:reservation.task_id,seq:2})).ok, false);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM task_inputs WHERE seq=2').get().n, 0);
   assert.equal((await call({method:'route_accepted',job_id:'job2',task_id:reservation.task_id,seq:2})).ok, false);
   assert.equal((await call({...req, note: 'untrusted'})).ok, false);
 });
@@ -69,8 +68,22 @@ test('gateway close releases the socket for restart and refuses an occupied sock
   const options = {tasks:{db}, socketDir:dir, lockDir:dir, grants:[], rootUri:'viking://jobs'};
   let server = await startReservationGateway(options);
   t.after(async () => { if (server) await server.close(); db.close(); fs.rmSync(dir, {recursive:true, force:true}); });
+  assert.equal(fs.statSync(server.socketPath).mode & 0o777, 0o600);
   await assert.rejects(startReservationGateway(options), /socket already exists/);
   await server.close(); server = null;
   assert.equal(fs.existsSync(path.join(dir, 'reservations.sock')), false);
   server = await startReservationGateway(options);
+});
+
+ test('rejects unsafe socket directory and dangling path without removing it', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'scieval-perms-'));
+  t.after(() => fs.rmSync(dir, {recursive:true, force:true}));
+  const options = {tasks:{}, socketDir:dir, lockDir:dir, grants:[], rootUri:'viking://jobs'};
+  fs.chmodSync(dir, 0o755);
+  await assert.rejects(startReservationGateway(options), /private/);
+  fs.chmodSync(dir, 0o700);
+  const socketPath = path.join(dir, 'reservations.sock');
+  fs.symlinkSync(path.join(dir, 'missing'), socketPath);
+  await assert.rejects(startReservationGateway(options), /socket already exists/);
+  assert.equal(fs.lstatSync(socketPath).isSymbolicLink(), true);
 });
