@@ -17,6 +17,55 @@ import { OVConnection, OVUnavailableError } from '../src/ov-connection.mjs';
 import { fakeOV } from './ov-server-fixture.mjs';
 
 describe('daemon event path (mock env)', { concurrency: false }, () => {
+  it('SciEval daemon restart replays a ledgered event after acknowledgement failure', async (context) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'scieval-restart-'));
+    context.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const databasePath = path.join(dir, 'p1.db');
+    const runtimePath = path.join(dir, 'runtime.db');
+    const framework = new URL('../../../../scieval-vika-p0/', import.meta.url).pathname;
+    const python = (script) => execFileSync('python3', ['-c', script, databasePath], { cwd: framework });
+    python('import sys; from framework import Store; s=Store(sys.argv[1]); s.create("job-1"); s.transition("job-1",0,"preparing"); s.close()');
+    python('import sqlite3,sys; db=sqlite3.connect(sys.argv[1]); db.execute("CREATE TRIGGER fail_ack BEFORE UPDATE OF delivered ON outbox BEGIN SELECT RAISE(FAIL, \'injected failure\'); END"); db.close()');
+    const outbox = createLocalOutbox({ databasePath });
+    const [event] = await outbox.pending();
+    const config = { scievalBridgeEnabled: true, scievalDatabasePath: databasePath, scievalPollIntervalMs: 100, databasePath: runtimePath };
+    const first = await startMockEnv({ config });
+    try {
+      await first.waitFor(() => !!first.daemon.store.getInboundByEvent.get('scieval', event.event_id));
+      assert.equal((await outbox.pending()).length, 1);
+    } finally { await first.stop(); }
+    assert.equal((await outbox.pending()).length, 1);
+    python('import sqlite3,sys; db=sqlite3.connect(sys.argv[1]); db.execute("DROP TRIGGER fail_ack"); db.close()');
+    const second = await startMockEnv({ config });
+    try {
+      const deadline = Date.now() + 8000;
+      while ((await outbox.pending()).length && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50));
+      assert.deepEqual(await outbox.pending(), []);
+      const rows = second.daemon.store.db.prepare('SELECT event_json FROM connector_events WHERE connector_instance = ? AND event_id = ?').all('scieval', event.event_id);
+      assert.equal(rows.length, 1);
+      assert.equal(JSON.parse(rows[0].event_json).data.scieval.event_id, event.event_id);
+    } finally { await second.stop(); }
+  });
+
+  it('SciEval daemon retries a missing source database when it becomes available', async (context) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'scieval-retry-'));
+    context.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const databasePath = path.join(dir, 'p1.db');
+    const framework = new URL('../../../../scieval-vika-p0/', import.meta.url).pathname;
+    const env = await startMockEnv({ config: { scievalBridgeEnabled: true, scievalDatabasePath: databasePath, scievalPollIntervalMs: 100 } });
+    try {
+      // Allow scheduled attempts while the source is absent.
+      assert.ok(env.daemon.scievalScheduler);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      assert.equal(fs.existsSync(databasePath), false);
+      const eventId = execFileSync('python3', ['-c', 'import sys; from framework import Store; s=Store(sys.argv[1]); s.create("job-1"); s.transition("job-1",0,"preparing"); print(s.db.execute("SELECT event_id FROM outbox").fetchone()[0]); s.close()', databasePath], { cwd: framework, encoding: 'utf8' }).trim();
+      const outbox = createLocalOutbox({ databasePath });
+      const deadline = Date.now() + 8000;
+      while ((await outbox.pending()).length && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50));
+      assert.deepEqual(await outbox.pending(), []);
+      assert.ok(env.daemon.store.getInboundByEvent.get('scieval', eventId));
+    } finally { await env.stop(); }
+  });
   it('polls the opted-in SciEval outbox and stops it with the daemon', async (context) => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'scieval-daemon-'));
     context.after(() => fs.rmSync(dir, { recursive: true, force: true }));
