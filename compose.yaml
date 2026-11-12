@@ -1,7 +1,7 @@
 name: scieval-vika-dev
 services:
   vika-dev:
-    image: node:24.21.0-bookworm
+    image: m.daocloud.io/docker.io/library/node:24-bookworm@sha256:e7add2a490bb17d97b485b8641bd88455fff7839ade0f5eba493c3508124d413
     working_dir: /project/vika
     environment:
       VIKA_WORKSPACE: /dev-workspace

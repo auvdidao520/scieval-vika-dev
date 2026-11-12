@@ -14,7 +14,7 @@ docker compose run --rm vika-dev npm run check
 docker compose run --rm vika-dev npm test
 ```
 
-Node.js 固定为 24.21.0。依赖和运行数据使用本项目的独立 Docker 卷。开发资料和课件可放在 `workspace/`，该目录供容器访问并由 Git 忽略。测试使用模拟连接器和运行时，真实飞书、Codex 与 OpenViking 连接可在开发后按任务配置。
+使用 `docker compose run --rm vika-dev bash` 进入开发容器。Node.js 固定为 24.22.2。依赖和运行数据使用本项目的独立 Docker 卷。开发资料和课件可放在 `workspace/`，该目录供容器访问并由 Git 忽略。测试使用模拟连接器和运行时，真实飞书、Codex 与 OpenViking 连接可在开发后按任务配置。
 
 ## 首个开发阶段
 
