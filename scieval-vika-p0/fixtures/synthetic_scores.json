@@ -1,0 +1,8 @@
+{
+  "fixture_version": "synthetic-v1",
+  "provenance": "人工构造，仅供接口和流程测试，不代表真实评分、标注或模型输出",
+  "rounds": {
+    "1": {"default_score": 1, "decision": "revise"},
+    "2": {"default_score": 2, "decision": "human_review"}
+  }
+}
