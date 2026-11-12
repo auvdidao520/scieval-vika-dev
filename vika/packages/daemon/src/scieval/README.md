@@ -19,7 +19,7 @@ For each event the harness is invoked and the matching unfiltered Runtime ledger
 
 A malformed or identity-mismatched outbox row does not prevent earlier valid rows in the same batch from being delivered. Once that row reaches the head of the queue, the poll fails visibly and does not skip it; repair is required before later rows can be processed.
 
-Ledger acceptance does not mean agent processing or external delivery completed. This local integration does not establish authenticated identity, distributed exactly-once delivery, automatic polling, or real SciEval evaluation; those require separate integration work. Treat the database and bridge configuration as privileged: callers with acknowledgement access can mark source events delivered.
+Ledger acceptance does not mean agent processing or external delivery completed. This local integration does not establish authenticated identity, distributed exactly-once delivery or real SciEval evaluation; those require separate integration work. Treat the database and bridge configuration as privileged: callers with acknowledgement access can mark source events delivered.
 
 ## Daemon lifecycle
 

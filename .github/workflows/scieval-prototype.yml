@@ -38,4 +38,4 @@ jobs:
         working-directory: vika
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Test local bridge and Runtime adapter
-        run: node --test vika/packages/daemon/test/scieval-adapter.test.mjs vika/packages/daemon/test/scieval-local-outbox.test.mjs
+        run: node --test vika/packages/daemon/test/scieval-adapter.test.mjs vika/packages/daemon/test/scieval-local-outbox.test.mjs vika/packages/daemon/test/scieval-scheduler.test.mjs
