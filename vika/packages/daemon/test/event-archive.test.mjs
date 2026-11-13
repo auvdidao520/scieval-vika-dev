@@ -7,7 +7,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { DatabaseSync, backup } from 'node:sqlite';
 import { spawnSync } from 'node:child_process';
-import { migrateEventArchive, archiveDoneEvent, readArchivedEvent, archiveDoneBatch, hydrateEventRow } from '../src/event-archive.mjs';
+import { migrateEventArchive, archiveDoneEvent, readArchivedEvent, archiveDoneBatch, hydrateEventRow, rollbackShadowArchiveBatch } from '../src/event-archive.mjs';
 
 test('shadow archive survives restart and legacy reader, with transactional rollback', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'event-archive-'));
@@ -43,6 +43,43 @@ test('shadow archive survives restart and legacy reader, with transactional roll
     db.prepare("UPDATE connector_event_archive SET payload=x'00' WHERE seq=1").run();
     assert.throws(() => readArchivedEvent(db, 1), /payload/);
   } finally { db.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('offline shadow rollback validates each batch and restores legacy writes', () => {
+  const db = new DatabaseSync(':memory:');
+  try {
+    db.exec(`CREATE TABLE connector_events(seq INTEGER PRIMARY KEY, status TEXT, event_json TEXT NOT NULL, connector_instance TEXT, event_id TEXT, UNIQUE(connector_instance,event_id));
+      INSERT INTO connector_events VALUES(1,'DONE','{"x":1}','c','1'),(2,'DONE','{"x":2}','c','2')`);
+    migrateEventArchive(db);
+    archiveDoneEvent(db, 1); archiveDoneEvent(db, 2);
+    assert.equal(rollbackShadowArchiveBatch(db, {limit: 1}), 1);
+    db.exec("UPDATE connector_events SET event_json='{}' WHERE seq=1");
+    assert.throws(() => db.exec('DELETE FROM connector_event_archive WHERE seq=2'), /immutable/);
+    db.exec('DROP TRIGGER event_archive_no_update');
+    db.exec("UPDATE connector_event_archive SET sha256='bad' WHERE seq=2");
+    assert.throws(() => rollbackShadowArchiveBatch(db), /integrity/);
+    assert.equal(db.prepare('SELECT count(*) n FROM connector_event_archive').get().n, 1);
+    assert.throws(() => db.exec('DELETE FROM connector_event_archive WHERE seq=2'), /immutable/);
+  } finally { db.close(); }
+});
+
+test('SIGKILL during downgrade transaction restores archive and protection', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'archive-rollback-'));
+  const file = path.join(dir, 'state.db');
+  let db = new DatabaseSync(file);
+  try {
+    db.exec(`PRAGMA journal_mode=WAL; CREATE TABLE connector_events(seq INTEGER PRIMARY KEY, status TEXT, event_json TEXT NOT NULL, connector_instance TEXT, event_id TEXT, UNIQUE(connector_instance,event_id)); INSERT INTO connector_events VALUES(1,'DONE','{}','c','1')`);
+    migrateEventArchive(db); archiveDoneEvent(db, 1); db.close();
+    const child = spawnSync(process.execPath, ['--input-type=module', '-e', `import {DatabaseSync} from 'node:sqlite'; const db=new DatabaseSync(process.argv[1]); db.exec('BEGIN IMMEDIATE; DROP TRIGGER event_archive_no_delete; DELETE FROM connector_event_archive'); process.kill(process.pid,'SIGKILL')`, file]);
+    assert.equal(child.signal, 'SIGKILL');
+    db = new DatabaseSync(file);
+    assert.equal(readArchivedEvent(db, 1), '{}');
+    assert.throws(() => db.exec('DELETE FROM connector_event_archive'), /immutable/);
+    assert.equal(rollbackShadowArchiveBatch(db), 1);
+    db.close(); db = new DatabaseSync(file);
+    assert.equal(db.prepare('SELECT event_json FROM connector_events').get().event_json, '{}');
+    db.exec("UPDATE connector_events SET event_json='legacy' WHERE seq=1");
+  } finally { db.close(); fs.rmSync(dir, {recursive:true, force:true}); }
 });
 
 

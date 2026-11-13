@@ -82,3 +82,37 @@ export function archiveDoneBatch(db, { before, limit = 100 } = {}) {
   for (const row of rows) archiveDoneEvent(db, row.seq);
   return rows.length;
 }
+
+// Offline downgrade preparation for shadow archives only. Stop all archivers
+// until the old binary starts. Each batch owns an IMMEDIATE transaction.
+// Validate the entire selected batch before removing its write protections.
+export function rollbackShadowArchiveBatch(db, { limit = 100 } = {}) {
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1000) throw new TypeError('invalid rollback batch');
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const count = rollbackShadowArchiveBatchInTransaction(db, limit);
+    db.exec('COMMIT');
+    return count;
+  } catch (error) {
+    try { db.exec('ROLLBACK'); } catch {}
+    throw error;
+  }
+}
+
+function rollbackShadowArchiveBatchInTransaction(db, limit) {
+  const rows = db.prepare(`SELECT a.seq, e.event_json FROM connector_event_archive a
+    LEFT JOIN connector_events e ON e.seq=a.seq ORDER BY a.seq LIMIT ?`).all(limit);
+  for (const row of rows) {
+    if (typeof row.event_json !== 'string' || readArchivedEvent(db, row.seq) !== row.event_json) {
+      throw new Error('archive differs from event');
+    }
+  }
+  if (!rows.length) return 0;
+  // SQLite rolls back both the DDL and deletes on failure or process death.
+  db.exec('DROP TRIGGER event_archive_no_delete');
+  const remove = db.prepare('DELETE FROM connector_event_archive WHERE seq=?');
+  for (const row of rows) remove.run(row.seq);
+  db.exec(`CREATE TRIGGER event_archive_no_delete BEFORE DELETE ON connector_event_archive
+    BEGIN SELECT RAISE(ABORT, 'event archive is immutable'); END`);
+  return rows.length;
+}
