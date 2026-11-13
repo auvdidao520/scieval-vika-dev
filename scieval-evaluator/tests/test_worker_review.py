@@ -1,6 +1,8 @@
 import hashlib
 import json
 import sqlite3
+import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -42,7 +44,15 @@ class WorkerReviewTests(unittest.TestCase):
                                     'content_base64': base64.b64encode(raw).decode()}}
             host_result = review_host_handoff(client, handoff)
             self.assertEqual((host_result['lesson_id'], host_result['report_id'], host_result['decision']), ('lesson', 1, 'human_review'))
+            adapter = Path(__file__).resolve().parents[1] / 'host_review.py'
+            command = [sys.executable, str(adapter), '--url', f'http://127.0.0.1:{server.server_port}', '--token-file', str(token)]
+            process = subprocess.run(command, input=json.dumps(handoff), text=True, capture_output=True, timeout=10)
+            self.assertEqual(process.returncode, 0, process.stderr)
+            self.assertEqual(json.loads(process.stdout)['evaluation_id'], host_result['evaluation_id'])
             bad = {**handoff, 'artifact': {**handoff['artifact'], 'sha256': '0' * 64}}
+            process = subprocess.run(command, input=json.dumps(bad), text=True, capture_output=True, timeout=10)
+            self.assertNotEqual(process.returncode, 0)
+            self.assertEqual(process.stdout, '')
             with self.assertRaises(ValueError): review_host_handoff(client, bad)
             self.assertEqual(review_host_handoff(client, handoff)['evaluation_id'], host_result['evaluation_id'])
             Model.calls = 0
