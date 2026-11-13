@@ -331,10 +331,12 @@ describe('activity store', { concurrency: false }, () => {
   });
 
   it('keeps the append-only activity history when inbound rows are pruned', () => {
-    store.ingest(event('old', 'old body'), null, 1_000);
+    store.ingest(event('old', 'old body'), 'filtered', 1_000);
+    store.ingest(event('done', 'retained'), null, 1_000);
     const before = store.listActivities({ limit: 100 }).activities;
     const removed = store.prune(1_000, 10_000);
-    assert.ok(removed.inbound > 0);
+    assert.equal(removed.inbound, 1);
+    assert.equal(store.db.prepare("SELECT count(*) AS n FROM connector_events WHERE status = 'DONE'").get().n, 1);
     assert.equal(store.stats().activities, before.length);
     assert.deepEqual(
       store.listActivities({ limit: 100 }).activities.map((item) => item.id),
