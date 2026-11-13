@@ -94,6 +94,8 @@ def make_handler(db_path, api_token, endpoint, model_token, model):
             return True
         def do_POST(self):
             if not self.authorized(): return
+            if self.path == '/v1/feedback/classifications':
+                return self.classify_feedback()
             if self.path != '/v1/evaluations': return self.respond(404, {'error':'not found'})
             key = self.headers.get('Idempotency-Key', '')
             if not key or len(key) > 256: return self.respond(400, {'error':'invalid idempotency key'})
@@ -116,6 +118,20 @@ def make_handler(db_path, api_token, endpoint, model_token, model):
                     return self.respond(502, {'error':'model evaluation failed or returned invalid evidence'})
                 db.execute('INSERT INTO evaluations VALUES (?, ?, ?, ?)', (key, digest, report['evaluation_id'], json.dumps(report, ensure_ascii=False)))
             self.respond(200, {'evaluation_id':report['evaluation_id'], 'status':'succeeded'})
+        def classify_feedback(self):
+            from feedback import check_feedback, classify
+            try:
+                length = int(self.headers.get('Content-Length', '0'))
+                if length <= 0 or length > MAX_REQUEST: return self.respond(413, {'error':'invalid request size'})
+                data = json.loads(self.rfile.read(length))
+                content = check_feedback(data)
+            except (ValueError, TypeError, UnicodeError):
+                return self.respond(400, {'error':'invalid feedback request'})
+            try:
+                result = classify(data, content, endpoint, model_token, model)
+            except (ValueError, KeyError, IndexError, TypeError, OSError, HTTPError, URLError):
+                return self.respond(502, {'error':'classification failed or returned invalid evidence'})
+            return self.respond(200, result)
         def do_GET(self):
             if not self.authorized(): return
             prefix = '/v1/evaluations/'
