@@ -196,6 +196,42 @@ describe('configuration safety', { concurrency: false }, () => {
     }
   });
 
+  it('configures scieval with HTTPS or loopback HTTP and a private token file', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'scieval-config-'));
+    const tokenFile = path.join(directory, 'scieval.token');
+    fs.writeFileSync(tokenFile, 'secret', { mode: 0o600 });
+    setEnv('VIKA_CHANNEL', 'lark');
+    setEnv('VIKA_CONNECTORS_JSON', '["lark","scieval"]');
+    setEnv('SCIEVAL_TOKEN_FILE', tokenFile);
+    setEnv('SCIEVAL_BASE_URL', 'https://scieval.example.edu/');
+    setEnv('SCIEVAL_POLL_INTERVAL_MS', '15000');
+    setEnv('SCIEVAL_REQUEST_TIMEOUT_MS', '5000');
+    try {
+      const config = getConfig();
+      assert.deepEqual(config.scieval, {
+        baseUrl: 'https://scieval.example.edu',
+        tokenFile,
+        pollIntervalMs: 15_000,
+        requestTimeoutMs: 5_000,
+      });
+      setEnv('SCIEVAL_BASE_URL', 'http://scieval.example.edu');
+      assert.throws(() => getConfig(), /SCIEVAL_BASE_URL/);
+      setEnv('SCIEVAL_BASE_URL', 'http://127.0.0.1:8080');
+      assert.equal(getConfig().scieval.baseUrl, 'http://127.0.0.1:8080');
+      setEnv('SCIEVAL_BASE_URL', 'https://user:pass@scieval.example.edu');
+      assert.throws(() => getConfig(), /must not contain credentials/);
+      setEnv('SCIEVAL_BASE_URL', 'https://scieval.example.edu');
+      setEnv('SCIEVAL_POLL_INTERVAL_MS', '1000');
+      assert.throws(() => getConfig(), /SCIEVAL_POLL_INTERVAL_MS/);
+      setEnv('SCIEVAL_POLL_INTERVAL_MS', '30000');
+      setEnv('SCIEVAL_TOKEN_FILE', path.join(directory, 'missing'));
+      assert.throws(() => getConfig(), /ENOENT/);
+    } finally {
+      for (const name of ['SCIEVAL_BASE_URL', 'SCIEVAL_TOKEN_FILE', 'SCIEVAL_POLL_INTERVAL_MS', 'SCIEVAL_REQUEST_TIMEOUT_MS']) setEnv(name, undefined);
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('rejects a mismatched daemon and lark-cli profile', () => {
     setEnv('VIKA_LARK_PROFILE', 'cli_expected');
     setEnv('LARKSUITE_CLI_PROFILE', 'cli_wrong');
