@@ -127,10 +127,22 @@ def make_handler(db_path, api_token, endpoint, model_token, model):
                 content = check_feedback(data)
             except (ValueError, TypeError, UnicodeError):
                 return self.respond(400, {'error':'invalid feedback request'})
-            try:
-                result = classify(data, content, endpoint, model_token, model)
-            except (ValueError, KeyError, IndexError, TypeError, OSError, HTTPError, URLError):
-                return self.respond(502, {'error':'classification failed or returned invalid evidence'})
+            key = self.headers.get('Idempotency-Key', '')
+            if not key or len(key) > 256:
+                return self.respond(400, {'error':'invalid idempotency key'})
+            digest = hashlib.sha256(json.dumps(data, sort_keys=True, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
+            with sqlite3.connect(db_path) as db:
+                row = db.execute('SELECT digest, result FROM feedback_classifications WHERE key=?', (key,)).fetchone()
+                if row:
+                    if row[0] != digest:
+                        return self.respond(409, {'error':'idempotency key conflict'})
+                    return self.respond(200, json.loads(row[1]))
+                try:
+                    result = classify(data, content, endpoint, model_token, model)
+                except (ValueError, KeyError, IndexError, TypeError, OSError, HTTPError, URLError):
+                    return self.respond(502, {'error':'classification failed or returned invalid evidence'})
+                db.execute('INSERT INTO feedback_classifications VALUES (?, ?, ?)',
+                           (key, digest, json.dumps(result, ensure_ascii=False)))
             return self.respond(200, result)
         def do_GET(self):
             if not self.authorized(): return
@@ -162,6 +174,7 @@ def main():
         parser.error('valid API and model tokens are required')
     with sqlite3.connect(args.db) as db:
         db.execute('CREATE TABLE IF NOT EXISTS evaluations (key TEXT PRIMARY KEY, digest TEXT NOT NULL, evaluation_id TEXT UNIQUE NOT NULL, report TEXT NOT NULL)')
+        db.execute('CREATE TABLE IF NOT EXISTS feedback_classifications (key TEXT PRIMARY KEY, digest TEXT NOT NULL, result TEXT NOT NULL)')
     HTTPServer(('127.0.0.1', args.port), make_handler(args.db, token, args.model_url, model_token, args.model)).serve_forever()
 
 if __name__ == '__main__':

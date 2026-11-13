@@ -29,6 +29,8 @@ PYTHONPATH=scieval-evaluator python3 -m unittest discover -s scieval-evaluator/t
 
 ## 教师反馈分类（试点）
 
-`POST /v1/feedback/classifications` 使用同一 Bearer token，接受评测请求相同的 `schema_version`、`job_id`、`round`、`rubric`、`policy_version`、`artifact` 字段及 `feedback` 字符串。返回多个指标 ID、教师原话、HTML 原文证据、置信度、验收条件和 `needs_clarification` 或 `human_review`。系统校验证据是否逐字存在，不能验证教学判断或定位是否正确。空证据、低于 0.7 的置信度或模型提出澄清时返回 `needs_clarification`；0.7 是试点保守门槛，未经校准。该接口每次调用模型，没有幂等缓存；400 为输入无效，401 为认证失败，413 为请求过大，502 为模型或证据错误。失败不派工。
+`POST /v1/feedback/classifications` 使用同一 Bearer token，接受评测请求相同的 `schema_version`、`job_id`、`round`、`rubric`、`policy_version`、`artifact` 字段及 `feedback` 字符串。返回多个指标 ID、教师原话、HTML 原文证据、置信度、验收条件和 `needs_clarification` 或 `human_review`。系统校验证据是否逐字存在，不能验证教学判断或定位是否正确。空证据、低于 0.7 的置信度或模型提出澄清时返回 `needs_clarification`；0.7 是试点保守门槛，未经校准。请求必须带 `Idempotency-Key`。同一键和相同请求复用已保存的分类，不同请求返回 409；模型失败不缓存，可用同一键重试。400 为输入无效，401 为认证失败，413 为请求过大，502 为模型或证据错误。键由可信调用方按来源和事件身份构造，此缓存本身不验证 IM 身份，也不能替代原生事件去重。失败不派工。
 
 此接口没有连接 IM 身份校验、去重、Vika task_create/task_route、Worker、渲染评测、教师确认或发布，不能作为自动派工的授权。草案 rubric 尚无完整评分锚点，也没有真实模型的质量验证。见 [交互式闭环接口设计](闭环接口设计.html)，其中明确区分代码与待实现部分。
+
+分类缓存与评测报告共用服务的本地 SQLite，沿用单实例假设。模型完成后、缓存写入前若进程崩溃，重试仍可能再次调用模型；这不提供跨系统恰好一次派工保证。
