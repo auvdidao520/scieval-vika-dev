@@ -1,7 +1,7 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { chatTag, metadataTag, oneLine } from './runtime-input.mjs';
@@ -70,6 +70,20 @@ const SCHEMA = `
     created_at_ms INTEGER NOT NULL,
     updated_at_ms INTEGER NOT NULL,
     ended_at_ms INTEGER
+  );
+  -- Written only by trusted in-process host code, never by task_report.
+  CREATE TABLE IF NOT EXISTS lesson_task_contexts (
+    task_id TEXT PRIMARY KEY REFERENCES tasks(id),
+    lesson_id TEXT NOT NULL, job_id TEXT NOT NULL, round INTEGER NOT NULL,
+    rubric_id TEXT NOT NULL, rubric_version TEXT NOT NULL, policy_version TEXT NOT NULL,
+    pass_score INTEGER NOT NULL, artifact_path TEXT NOT NULL
+  );
+  -- Host-captured handoffs are immutable snapshots, not Worker assertions.
+  CREATE TABLE IF NOT EXISTS lesson_review_handoffs (
+    report_id INTEGER PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    handoff_json TEXT NOT NULL,
+    created_at_ms INTEGER NOT NULL
   );
   CREATE TABLE IF NOT EXISTS task_inputs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -309,6 +323,75 @@ export class TaskManager {
     this.recordActivity('task.created', { summary: `${id} ${title}`, inboundSeq: origin.seq, metadata: { task: id } });
     this.request(id);
     return this.get(id);
+  }
+
+  // Host-only API. Do not expose this through worker actions or infer it from
+  // worker reports: the caller is responsible for authenticating its source.
+  bindLessonContext(taskId, context) {
+    const task = this.get(taskId);
+    if (!task) throw new Error('unknown task');
+    const keys = ['lessonId', 'jobId', 'round', 'rubricId', 'rubricVersion', 'policyVersion', 'passScore', 'artifactPath'];
+    if (!context || Object.keys(context).length !== keys.length || keys.some((key) => !Object.hasOwn(context, key))) throw new Error('invalid lesson context');
+    for (const key of ['lessonId', 'jobId', 'rubricId', 'rubricVersion', 'policyVersion']) {
+      if (typeof context[key] !== 'string' || !context[key].trim() || context[key].length > 200) throw new Error(`invalid ${key}`);
+    }
+    if (!Number.isSafeInteger(context.round) || context.round < 1 || !Number.isInteger(context.passScore) || context.passScore < 1 || context.passScore > 3) throw new Error('invalid round or threshold');
+    const artifact = context.artifactPath;
+    if (typeof artifact !== 'string' || !artifact || path.isAbsolute(artifact) || artifact.split(/[\\/]/).some((part) => !part || part === '.' || part === '..') || !artifact.endsWith('.html')) throw new Error('invalid artifact path');
+    this.db.prepare(`INSERT INTO lesson_task_contexts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(taskId, context.lessonId, context.jobId, context.round, context.rubricId, context.rubricVersion, context.policyVersion, context.passScore, artifact);
+  }
+
+  // An explicit host handoff: only the selected final structured done report
+  // is eligible. Capture bytes, not the Worker's untyped artifact list.
+  lessonReviewHandoff(taskId) {
+    const task = this.get(taskId);
+    const context = this.db.prepare('SELECT * FROM lesson_task_contexts WHERE task_id = ?').get(taskId);
+    if (!task || !context || task.status !== 'done') throw new Error('task is not eligible for lesson review');
+    const report = this.db.prepare('SELECT * FROM task_reports WHERE task_id = ? ORDER BY id DESC LIMIT 1').get(taskId);
+    if (!report || !report.structured || report.state !== 'done') throw new Error('structured done report required');
+    const base = fs.realpathSync(task.workdir);
+    const target = path.join(base, context.artifact_path);
+    const resolved = fs.realpathSync(target);
+    if (!resolved.startsWith(base + path.sep) || resolved !== target) throw new Error('artifact must stay inside task directory without symlinks');
+    const fd = fs.openSync(target, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+    let bytes;
+    try {
+      const stat = fs.fstatSync(fd);
+      if (!stat.isFile() || stat.size > 5 * 1024 * 1024) throw new Error('invalid artifact file');
+      bytes = fs.readFileSync(fd);
+      if (bytes.length > 5 * 1024 * 1024) throw new Error('artifact too large');
+      new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    } finally { fs.closeSync(fd); }
+    return { task_id: taskId, lesson_id: context.lesson_id, job_id: context.job_id, round: context.round,
+      rubric: { id: context.rubric_id, version: context.rubric_version }, policy_version: context.policy_version,
+      pass_score: context.pass_score, report_id: report.id, artifact: { media_type: 'text/html',
+        sha256: createHash('sha256').update(bytes).digest('hex'), content_base64: bytes.toString('base64') } };
+  }
+
+  // Call only from a trusted host after the Worker has been isolated from the
+  // host database and evaluator authority. The current local executor does not
+  // provide that boundary, so this is deliberately not wired to afterTurn.
+  persistLessonReviewHandoff(taskId) {
+    const task = this.get(taskId);
+    if (!task || task.status !== 'done') throw new Error('task is not eligible for lesson review');
+    const report = this.db.prepare('SELECT * FROM task_reports WHERE task_id = ? ORDER BY id DESC LIMIT 1').get(taskId);
+    if (!report || !report.structured || report.state !== 'done') throw new Error('structured done report required');
+    const saved = this.getPersistedLessonReviewHandoff(report.id);
+    if (saved) return saved;
+    const handoff = this.lessonReviewHandoff(taskId);
+    return this.transaction(() => {
+      const existing = this.db.prepare('SELECT handoff_json FROM lesson_review_handoffs WHERE report_id = ?').get(handoff.report_id);
+      if (existing) return JSON.parse(existing.handoff_json);
+      this.db.prepare('INSERT INTO lesson_review_handoffs(report_id, task_id, handoff_json, created_at_ms) VALUES (?, ?, ?, ?)')
+        .run(handoff.report_id, taskId, JSON.stringify(handoff), this.now());
+      return handoff;
+    });
+  }
+
+  getPersistedLessonReviewHandoff(reportId) {
+    const row = this.db.prepare('SELECT handoff_json FROM lesson_review_handoffs WHERE report_id = ?').get(reportId);
+    return row ? JSON.parse(row.handoff_json) : null;
   }
 
   addInput(taskId, row, role) {
