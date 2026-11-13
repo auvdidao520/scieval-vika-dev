@@ -15,7 +15,7 @@ import { MeetingStore, migrateMeetingStore } from './meeting/store.mjs';
 import { migrateCardMessages, acceptCardAnswer } from './card-messages.mjs';
 import { migrateApprovals, pruneApprovals } from './approvals.mjs';
 import { normalizeEvent, eventIdentity } from './event.mjs';
-import { migrateEventArchive, archiveDoneEvent, readArchivedEvent } from './event-archive.mjs';
+import { migrateEventArchive, archiveDoneEvent, readArchivedEvent, hydrateEventRow, archiveDoneBatch } from './event-archive.mjs';
 
 function number(value) {
   return typeof value === 'bigint' ? Number(value) : value;
@@ -770,6 +770,10 @@ export class Store {
     return this.transaction(() => archiveDoneEvent(this.db, seq));
   }
 
+  archiveDoneBatch(options) {
+    return this.transaction(() => archiveDoneBatch(this.db, options));
+  }
+
   readArchivedEvent(seq) {
     return readArchivedEvent(this.db, seq);
   }
@@ -779,7 +783,7 @@ export class Store {
   ingest(event, filterReason = null, now = Date.now(), { journal = true } = {}) {
     return this.transaction(() => {
       const existing = this.getInboundByEvent.get(event.connectorInstance, event.eventId);
-      if (existing) return { inserted: false, inbound: rowToInbound(existing), filterReason: existing.filter_reason };
+      if (existing) return { inserted: false, inbound: rowToInbound(hydrateEventRow(this.db, existing)), filterReason: existing.filter_reason };
       if (!filterReason && event.kind === 'message.action' && !acceptCardAnswer(this.db, event, now)) {
         filterReason = 'card_already_answered_or_expired';
       }
@@ -849,7 +853,7 @@ export class Store {
           },
         }, now);
       }
-      return { inserted, inbound: rowToInbound(row), filterReason: row?.filter_reason ?? filterReason };
+      return { inserted, inbound: rowToInbound(hydrateEventRow(this.db, row)), filterReason: row?.filter_reason ?? filterReason };
     });
   }
 
@@ -1501,7 +1505,7 @@ export class Store {
 
   inboundBySeq(seq) {
     if (seq === null || seq === undefined) return null;
-    return rowToInbound(this.db.prepare('SELECT * FROM connector_events WHERE seq = ?').get(seq));
+    return rowToInbound(hydrateEventRow(this.db, this.db.prepare('SELECT * FROM connector_events WHERE seq = ?').get(seq)));
   }
 
   clearGlobalSession() {
@@ -1599,20 +1603,21 @@ export class Store {
   // Only the message's place (chat, thread) is read from it, which every event
   // about that message shares.
   eventByMessageId(messageId, connector) {
-    return this.db.prepare(`SELECT * FROM connector_events WHERE connector_instance = ? AND message_id = ?
-      ORDER BY seq DESC LIMIT 1`).get(connector, messageId) ?? null;
+    const row = this.db.prepare(`SELECT * FROM connector_events WHERE connector_instance = ? AND message_id = ?
+      ORDER BY seq DESC LIMIT 1`).get(connector, messageId);
+    return hydrateEventRow(this.db, row) ?? null;
   }
 
   // Accepted inbound events with this event id: at most one per instance.
   acceptedEvents(eventId, instance = null) {
     return this.db.prepare("SELECT * FROM connector_events WHERE event_id = ? AND status = 'DONE' ORDER BY seq")
-      .all(eventId).filter((row) => instance === null || row.connector_instance === instance);
+      .all(eventId).filter((row) => instance === null || row.connector_instance === instance).map(row => hydrateEventRow(this.db, row));
   }
 
   // Accepted inbound events that carried this message on one instance.
   acceptedMessageEvents(messageId, instance) {
     return this.db.prepare(`SELECT * FROM connector_events
-      WHERE connector_instance = ? AND message_id = ? AND status = 'DONE'`).all(instance, messageId);
+      WHERE connector_instance = ? AND message_id = ? AND status = 'DONE'`).all(instance, messageId).map(row => hydrateEventRow(this.db, row));
   }
 
   // The newest accepted inbound received after seq in that scope, if any. Core

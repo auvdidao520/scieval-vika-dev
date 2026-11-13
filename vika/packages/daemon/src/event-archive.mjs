@@ -12,7 +12,17 @@ export function migrateEventArchive(db) {
     seq INTEGER PRIMARY KEY REFERENCES connector_events(seq) ON DELETE CASCADE,
     version INTEGER NOT NULL, payload BLOB NOT NULL,
     byte_length INTEGER NOT NULL, sha256 TEXT NOT NULL
-  )`);
+  );
+  CREATE TRIGGER IF NOT EXISTS archived_event_no_delete BEFORE DELETE ON connector_events
+  WHEN EXISTS (SELECT 1 FROM connector_event_archive WHERE seq=OLD.seq)
+  BEGIN SELECT RAISE(ABORT, 'archived event is immutable'); END;
+  CREATE TRIGGER IF NOT EXISTS archived_event_no_update BEFORE UPDATE ON connector_events
+  WHEN EXISTS (SELECT 1 FROM connector_event_archive WHERE seq=OLD.seq)
+  BEGIN SELECT RAISE(ABORT, 'archived event is immutable'); END;
+  CREATE TRIGGER IF NOT EXISTS event_archive_no_update BEFORE UPDATE ON connector_event_archive
+  BEGIN SELECT RAISE(ABORT, 'event archive is immutable'); END;
+  CREATE TRIGGER IF NOT EXISTS event_archive_no_delete BEFORE DELETE ON connector_event_archive
+  BEGIN SELECT RAISE(ABORT, 'event archive is immutable'); END;`);
 }
 
 // Caller owns the transaction. This never changes the original row.
@@ -45,4 +55,23 @@ export function readArchivedEvent(db, seq) {
   if (!Buffer.from(value, 'utf8').equals(bytes)) throw new Error('invalid archive UTF-8');
   try { JSON.parse(value); } catch { throw new Error('invalid archive JSON'); }
   return value;
+}
+
+// The hot copy remains mandatory until all consumers and downgrade paths are ready.
+export function hydrateEventRow(db, row) {
+  if (!row) return row;
+  const archived = db.prepare('SELECT 1 FROM connector_event_archive WHERE seq = ?').get(row.seq);
+  if (!archived) return row;
+  const event_json = readArchivedEvent(db, row.seq);
+  if (event_json !== row.event_json) throw new Error('archive differs from event');
+  return { ...row, event_json };
+}
+
+// Caller holds BEGIN IMMEDIATE; each batch commits or rolls back as a unit.
+export function archiveDoneBatch(db, { before, limit = 100 } = {}) {
+  if (!Number.isSafeInteger(before) || !Number.isSafeInteger(limit) || limit < 1 || limit > 1000) throw new TypeError('invalid archive batch');
+  const rows = db.prepare(`SELECT seq FROM connector_events e WHERE status = 'DONE' AND received_at_ms < ?
+    AND NOT EXISTS (SELECT 1 FROM connector_event_archive a WHERE a.seq=e.seq) ORDER BY seq LIMIT ?`).all(before, limit);
+  for (const row of rows) archiveDoneEvent(db, row.seq);
+  return rows.length;
 }

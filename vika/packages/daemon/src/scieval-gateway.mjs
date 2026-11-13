@@ -1,3 +1,4 @@
+import { hydrateEventRow } from './event-archive.mjs';
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 // Explicitly started, local-only experimental reservation gateway.
@@ -92,12 +93,12 @@ export async function startReservationGateway({ tasks, socketDir, lockDir, grant
         } else if (request.method === 'accepted_scieval' && Object.keys(request).sort().join(',') === 'method,report_id') {
           if (typeof request.report_id !== 'string' || !request.report_id || request.report_id.length > 256) throw new Error('invalid report');
           result = tasks.db.prepare("SELECT seq, status, connector_instance, event_json FROM connector_events WHERE event_id = ? AND status = 'DONE' AND source = 'scieval' AND kind = 'evaluation.completed' ORDER BY seq LIMIT 3")
-            .all('evaluation.completed:' + request.report_id).map(({event_json, ...row}) => ({...row, event: JSON.parse(event_json)}));
+            .all('evaluation.completed:' + request.report_id).map(row => hydrateEventRow(tasks.db, row)).map(({event_json, ...row}) => ({...row, event: JSON.parse(event_json)}));
         } else if (request.method === 'route_accepted' && Object.keys(request).sort().join(',') === 'job_id,method,seq,task_id') {
           if (!idPattern.test(request.job_id) || !Number.isSafeInteger(request.seq) || typeof request.task_id !== 'string') throw new Error('invalid route');
           withJobLock(lockDir, request.job_id, () => {
             const binding = tasks.db.prepare('SELECT * FROM scieval_task_reservations WHERE job_id = ? AND task_id = ?').get(request.job_id, request.task_id);
-            const row = tasks.db.prepare("SELECT * FROM connector_events WHERE seq = ? AND status = 'DONE' AND source = 'scieval' AND kind = 'evaluation.completed' AND subject_type = 'scieval_job' AND subject_id = ?").get(request.seq, request.job_id);
+            const row = hydrateEventRow(tasks.db, tasks.db.prepare("SELECT * FROM connector_events WHERE seq = ? AND status = 'DONE' AND source = 'scieval' AND kind = 'evaluation.completed' AND subject_type = 'scieval_job' AND subject_id = ?").get(request.seq, request.job_id));
             if (!binding || !row) throw new Error('route rejected');
             const duplicates = tasks.db.prepare("SELECT count(*) AS n FROM connector_events WHERE event_id = ? AND status = 'DONE' AND source = 'scieval' AND kind = 'evaluation.completed'").get(row.event_id);
             if (duplicates.n !== 1) throw new Error('ambiguous event');

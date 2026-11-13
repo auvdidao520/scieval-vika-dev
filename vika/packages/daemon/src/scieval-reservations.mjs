@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 // Privileged in-process building block. No network or model-facing endpoint.
+import { hydrateEventRow, migrateEventArchive } from './event-archive.mjs';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -11,6 +12,7 @@ export class SciEvalReservations {
       throw new TypeError('tasks and trusted authorization and binding verifiers required');
     }
     Object.assign(this, { tasks, authorizeOrigin, verifyBinding });
+    if (tasks.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='connector_events'").get()) migrateEventArchive(tasks.db);
     tasks.db.exec(`CREATE TABLE IF NOT EXISTS scieval_task_reservations (
       job_id TEXT PRIMARY KEY, origin_seq INTEGER NOT NULL UNIQUE,
       task_id TEXT NOT NULL UNIQUE REFERENCES tasks(id)
@@ -23,7 +25,7 @@ export class SciEvalReservations {
     }
     const { tasks } = this;
     return tasks.transaction(() => {
-      const row = tasks.db.prepare("SELECT * FROM connector_events WHERE seq = ? AND status = 'DONE'").get(originSeq);
+      const row = hydrateEventRow(tasks.db, tasks.db.prepare("SELECT * FROM connector_events WHERE seq = ? AND status = 'DONE'").get(originSeq));
       if (!row || this.authorizeOrigin(jobId, row) !== true) throw new Error('origin not authorized');
       const existing = tasks.db.prepare('SELECT * FROM scieval_task_reservations WHERE job_id = ? OR origin_seq = ?').all(jobId, originSeq);
       if (existing.length) {
@@ -51,7 +53,7 @@ export class SciEvalReservations {
     tasks.transaction(() => {
       const reservation = tasks.db.prepare('SELECT * FROM scieval_task_reservations WHERE job_id = ?').get(jobId);
       if (!reservation || reservation.origin_seq !== originSeq || reservation.task_id !== taskId) throw new Error('reservation identity conflict');
-      const row = tasks.db.prepare("SELECT * FROM connector_events WHERE seq = ? AND status = 'DONE'").get(originSeq);
+      const row = hydrateEventRow(tasks.db, tasks.db.prepare("SELECT * FROM connector_events WHERE seq = ? AND status = 'DONE'").get(originSeq));
       if (!row || this.authorizeOrigin(jobId, row) !== true || this.verifyBinding(jobId, originSeq, taskId) !== true) throw new Error('binding not verified');
       const task = tasks.get(taskId);
       if (!task || task.origin_seq !== originSeq) throw new Error('reserved task mismatch');
