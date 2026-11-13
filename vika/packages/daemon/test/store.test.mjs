@@ -583,6 +583,21 @@ describe('Store', () => {
       before.map((item) => item.id),
     );
   });
+
+  it('retains an unreserved old origin and replay identity across cleanup and restarts', () => {
+    const original = event('late-origin', 'original body');
+    const { inbound } = store.ingest(original, null, 1_000);
+    for (let i = 0; i < 2; i++) {
+      store.prune(1_000, 10_000 + i);
+      store.close();
+      store = new Store(path.join(directory, 'state.sqlite3'), quietLogger);
+      const row = store.db.prepare('SELECT * FROM connector_events WHERE seq = ?').get(inbound.seq);
+      assert.equal(row.status, 'DONE');
+      assert.equal(row.content, 'original body');
+      assert.equal(JSON.parse(row.event_json).id, 'evt-late-origin');
+      assert.equal(store.ingest(original).inserted, false);
+    }
+  });
 });
 
 describe('decision ledger', () => {
