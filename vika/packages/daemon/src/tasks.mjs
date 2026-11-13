@@ -1,9 +1,10 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: AGPL-3.0
 
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 import { chatTag, metadataTag, oneLine } from './runtime-input.mjs';
 import { safeError } from './logger.mjs';
 
@@ -35,6 +36,25 @@ const TRANSIENT_RETRIES = 2;
 const SUMMARY_CHARS = 600;
 const REPORT_RETRY_MS = 1_000;
 const CANDIDATES = 3;
+
+// Opt-in host adapter. The worker supplies neither the evaluator endpoint nor
+// the review policy. host_review validates the returned report and evidence.
+function hostReviewer({ script, url, tokenFile }) {
+  return (handoff) => new Promise((resolve, reject) => {
+    const child = spawn('python3', [script, '--url', url, '--token-file', tokenFile], { stdio: ['pipe', 'pipe', 'pipe'], timeout: 180_000, killSignal: 'SIGKILL' });
+    let output = '';
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => { output += chunk; if (output.length > 4 * 1024 * 1024) child.kill('SIGKILL'); });
+    child.stderr.resume();
+    child.on('error', reject);
+    child.on('close', (code) => {
+      if (code !== 0) return reject(new Error('host review failed'));
+      try { resolve(JSON.parse(output)); } catch { reject(new Error('invalid host review output')); }
+    });
+    child.stdin.on('error', () => {});
+    child.stdin.end(JSON.stringify(handoff));
+  });
+}
 
 export const REPORT_STATES = Object.freeze(['progress', 'done', 'needs_user', 'blocked', 'dropped', 'failed']);
 const ENDED = new Set(['done', 'dropped', 'failed', 'stopped']);
@@ -70,6 +90,20 @@ const SCHEMA = `
     created_at_ms INTEGER NOT NULL,
     updated_at_ms INTEGER NOT NULL,
     ended_at_ms INTEGER
+  );
+  -- Written only by trusted in-process host code, never by task_report.
+  CREATE TABLE IF NOT EXISTS lesson_task_contexts (
+    task_id TEXT PRIMARY KEY REFERENCES tasks(id),
+    lesson_id TEXT NOT NULL, job_id TEXT NOT NULL, round INTEGER NOT NULL,
+    rubric_id TEXT NOT NULL, rubric_version TEXT NOT NULL, policy_version TEXT NOT NULL,
+    pass_score INTEGER NOT NULL, artifact_path TEXT NOT NULL
+  );
+  -- Host-captured handoffs are immutable snapshots, not Worker assertions.
+  CREATE TABLE IF NOT EXISTS lesson_review_handoffs (
+    report_id INTEGER PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    handoff_json TEXT NOT NULL,
+    created_at_ms INTEGER NOT NULL
   );
   CREATE TABLE IF NOT EXISTS task_inputs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -149,11 +183,13 @@ export class TaskManager {
     slots = WORKER_SLOTS,
     reservedSlots = RESERVED_SLOTS,
     now = Date.now,
+    lessonReviewer = null,
   }) {
     if (!db) throw new TypeError('db is required');
     if (!executor) throw new TypeError('executor is required');
     if (!inbox || inbox.db !== db) throw new TypeError('inbox must share the task database');
     Object.assign(this, { db, config, executor, inbox, lineFor, logger, recordActivity, slots, reservedSlots, now });
+    this.lessonReviewer = lessonReviewer ?? (config.lessonReview ? hostReviewer(config.lessonReview) : null);
     this.db.exec(SCHEMA);
     // Worker authority tokens: token -> task id, for the turn that holds it.
     this.tokens = new Map();
@@ -309,6 +345,74 @@ export class TaskManager {
     this.recordActivity('task.created', { summary: `${id} ${title}`, inboundSeq: origin.seq, metadata: { task: id } });
     this.request(id);
     return this.get(id);
+  }
+
+  // Host-only API. Do not expose this through worker actions or infer it from
+  // worker reports: the caller is responsible for authenticating its source.
+  bindLessonContext(taskId, context) {
+    const task = this.get(taskId);
+    if (!task) throw new Error('unknown task');
+    const keys = ['lessonId', 'jobId', 'round', 'rubricId', 'rubricVersion', 'policyVersion', 'passScore', 'artifactPath'];
+    if (!context || Object.keys(context).length !== keys.length || keys.some((key) => !Object.hasOwn(context, key))) throw new Error('invalid lesson context');
+    for (const key of ['lessonId', 'jobId', 'rubricId', 'rubricVersion', 'policyVersion']) {
+      if (typeof context[key] !== 'string' || !context[key].trim() || context[key].length > 200) throw new Error(`invalid ${key}`);
+    }
+    if (!Number.isSafeInteger(context.round) || context.round < 1 || !Number.isInteger(context.passScore) || context.passScore < 1 || context.passScore > 3) throw new Error('invalid round or threshold');
+    const artifact = context.artifactPath;
+    if (typeof artifact !== 'string' || !artifact || path.isAbsolute(artifact) || artifact.split(/[\\/]/).some((part) => !part || part === '.' || part === '..') || !artifact.endsWith('.html')) throw new Error('invalid artifact path');
+    this.db.prepare(`INSERT INTO lesson_task_contexts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(taskId, context.lessonId, context.jobId, context.round, context.rubricId, context.rubricVersion, context.policyVersion, context.passScore, artifact);
+  }
+
+  // An explicit host handoff: only the selected final structured done report
+  // is eligible. Capture bytes, not the Worker's untyped artifact list.
+  lessonReviewHandoff(taskId) {
+    const task = this.get(taskId);
+    const context = this.db.prepare('SELECT * FROM lesson_task_contexts WHERE task_id = ?').get(taskId);
+    if (!task || !context || task.status !== 'done') throw new Error('task is not eligible for lesson review');
+    const report = this.db.prepare('SELECT * FROM task_reports WHERE task_id = ? ORDER BY id DESC LIMIT 1').get(taskId);
+    if (!report || !report.structured || report.state !== 'done') throw new Error('structured done report required');
+    const base = fs.realpathSync(task.workdir);
+    const target = path.join(base, context.artifact_path);
+    const resolved = fs.realpathSync(target);
+    if (!resolved.startsWith(base + path.sep) || resolved !== target) throw new Error('artifact must stay inside task directory without symlinks');
+    const fd = fs.openSync(target, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+    let bytes;
+    try {
+      const stat = fs.fstatSync(fd);
+      if (!stat.isFile() || stat.size > 5 * 1024 * 1024) throw new Error('invalid artifact file');
+      bytes = fs.readFileSync(fd);
+      if (bytes.length > 5 * 1024 * 1024) throw new Error('artifact too large');
+      new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    } finally { fs.closeSync(fd); }
+    return { task_id: taskId, lesson_id: context.lesson_id, job_id: context.job_id, round: context.round,
+      rubric: { id: context.rubric_id, version: context.rubric_version }, policy_version: context.policy_version,
+      pass_score: context.pass_score, report_id: report.id, artifact: { media_type: 'text/html',
+        sha256: createHash('sha256').update(bytes).digest('hex'), content_base64: bytes.toString('base64') } };
+  }
+
+  // The caller must treat this as a host-process handoff, not an isolation
+  // boundary: the local Worker can share access to the host database.
+  persistLessonReviewHandoff(taskId) {
+    const task = this.get(taskId);
+    if (!task || task.status !== 'done') throw new Error('task is not eligible for lesson review');
+    const report = this.db.prepare('SELECT * FROM task_reports WHERE task_id = ? ORDER BY id DESC LIMIT 1').get(taskId);
+    if (!report || !report.structured || report.state !== 'done') throw new Error('structured done report required');
+    const saved = this.getPersistedLessonReviewHandoff(report.id);
+    if (saved) return saved;
+    const handoff = this.lessonReviewHandoff(taskId);
+    return this.transaction(() => {
+      const existing = this.db.prepare('SELECT handoff_json FROM lesson_review_handoffs WHERE report_id = ?').get(handoff.report_id);
+      if (existing) return JSON.parse(existing.handoff_json);
+      this.db.prepare('INSERT INTO lesson_review_handoffs(report_id, task_id, handoff_json, created_at_ms) VALUES (?, ?, ?, ?)')
+        .run(handoff.report_id, taskId, JSON.stringify(handoff), this.now());
+      return handoff;
+    });
+  }
+
+  getPersistedLessonReviewHandoff(reportId) {
+    const row = this.db.prepare('SELECT handoff_json FROM lesson_review_handoffs WHERE report_id = ?').get(reportId);
+    return row ? JSON.parse(row.handoff_json) : null;
   }
 
   addInput(taskId, row, role) {
@@ -487,19 +591,22 @@ export class TaskManager {
       result = { text: '', error: safeError(error) };
     } finally {
       this.tokens.delete(token);
-      this.running.delete(task.id);
     }
     // Shutting down: the task stays `running`, and restore() resumes it.
-    if (this.stopped) return;
+    if (this.stopped) { this.running.delete(task.id); return; }
     try {
-      this.afterTurn(task.id, result ?? {}, reportsBefore, slot);
+      await this.afterTurn(task.id, result ?? {}, reportsBefore, slot);
     } catch (error) {
       this.logger?.error('task_after_turn_failed', { task: task.id, error: safeError(error) });
+    } finally {
+      this.running.delete(task.id);
     }
+    // afterTurn may queue a revision or fresh owner input while this slot is held.
+    if (this.get(task.id)?.status === 'queued') this.request(task.id);
     this.pump();
   }
 
-  afterTurn(taskId, result, reportsBefore, slot) {
+  async afterTurn(taskId, result, reportsBefore, slot) {
     const task = this.get(taskId);
     if (!task || task.status === 'stopped') return;
     this.settleInputs(task, result);
@@ -539,6 +646,54 @@ export class TaskManager {
       return;
     }
     this.catchUp.delete(taskId);
+    // Only explicitly host-bound lesson tasks opt into review. Keep the
+    // original task and scheduler for revisions; never dispatch a new system.
+    const lesson = this.lessonReviewer && !result.error && report.state === 'done'
+      && this.db.prepare('SELECT * FROM lesson_task_contexts WHERE task_id = ?').get(taskId);
+    if (lesson) {
+      const superseded = () => {
+        if (this.stopped || this.get(taskId)?.status === 'stopped') return true;
+        if (this.undelivered(taskId).some((row) => row.role === 'owner')) {
+          this.setStatus(taskId, 'queued');
+          return true;
+        }
+        return false;
+      };
+      this.setStatus(taskId, 'done');
+      try {
+        const handoff = this.persistLessonReviewHandoff(taskId);
+        // A restart during the external request must not relay the Worker's
+        // unreviewed done report as a completed lesson.
+        this.setStatus(taskId, 'running');
+        const review = await this.lessonReviewer(handoff);
+        if (superseded()) return;
+        if (review.task_id !== taskId || review.report_id !== report.id || review.job_id !== lesson.job_id ||
+            review.round !== lesson.round || review.artifact_sha256 !== handoff.artifact.sha256 ||
+            !['pass', 'revise', 'human_review'].includes(review.recommendation) || !Array.isArray(review.criteria)) throw new Error('invalid review identity');
+        // Count completed review handoffs, not a caller-controlled round value.
+        const count = this.db.prepare('SELECT COUNT(*) AS n FROM lesson_review_handoffs WHERE task_id = ?').get(taskId).n;
+        if (review.recommendation === 'revise' && count <= 2) {
+          const feedback = JSON.stringify(review.criteria.filter((item) => item.result === 'revise'));
+          this.transaction(() => {
+            this.db.prepare('UPDATE lesson_task_contexts SET round = round + 1 WHERE task_id = ?').run(taskId);
+            this.db.prepare('INSERT INTO task_inputs(task_id, seq, role, text, created_at_ms) VALUES (?, NULL, ?, ?, ?)')
+              .run(taskId, 'context', `[SciEval review] Revise the existing HTML at ${lesson.artifact_path}. Unmet criteria: ${feedback}`, this.now());
+            this.setStatus(taskId, 'queued');
+          });
+          this.request(taskId);
+          return;
+        }
+        const artifact = path.join(task.workdir, lesson.artifact_path);
+        const text = `教案：${artifact}\nSciEval recommendation: ${review.recommendation}. ${review.recommendation === 'revise' ? 'Revision limit reached. ' : ''}Teacher review required.\n${JSON.stringify(review.criteria)}`;
+        this.report(taskId, { state: 'needs_user', summary: text, draft: text, question: '请教师复核修订后的教案。', artifacts: [artifact] });
+        report = this.db.prepare('SELECT * FROM task_reports WHERE task_id = ? ORDER BY id DESC LIMIT 1').get(taskId);
+      } catch (error) {
+        if (superseded()) return;
+        this.logger?.error('lesson_review_failed', { task: taskId, error: safeError(error) });
+        this.report(taskId, { state: 'blocked', summary: 'SciEval review failed', draft: '教案复评失败，尚未通过评测。' });
+        report = this.db.prepare('SELECT * FROM task_reports WHERE task_id = ? ORDER BY id DESC LIMIT 1').get(taskId);
+      }
+    }
     // Ending the task and recording the obligation to deliver its report are
     // atomic. A failed inbox write leaves this durable outbox available to retry.
     this.transaction(() => {

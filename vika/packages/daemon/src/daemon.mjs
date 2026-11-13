@@ -320,7 +320,9 @@ export class PersonalAgentDaemon {
         });
         this.tasks = new TaskManager({
           db: this.store.db,
-          config: this.config,
+          config: { ...this.config, ...(process.env.SCIEVAL_HOST_REVIEW_SCRIPT && process.env.SCIEVAL_URL && process.env.SCIEVAL_TOKEN_FILE ? {
+            lessonReview: { script: process.env.SCIEVAL_HOST_REVIEW_SCRIPT, url: process.env.SCIEVAL_URL, tokenFile: process.env.SCIEVAL_TOKEN_FILE },
+          } : {}) },
           executor,
           inbox: this.inbox,
           lineFor: (row) => {
