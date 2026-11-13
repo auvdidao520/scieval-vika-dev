@@ -78,6 +78,13 @@ const SCHEMA = `
     rubric_id TEXT NOT NULL, rubric_version TEXT NOT NULL, policy_version TEXT NOT NULL,
     pass_score INTEGER NOT NULL, artifact_path TEXT NOT NULL
   );
+  -- Host-captured handoffs are immutable snapshots, not Worker assertions.
+  CREATE TABLE IF NOT EXISTS lesson_review_handoffs (
+    report_id INTEGER PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    handoff_json TEXT NOT NULL,
+    created_at_ms INTEGER NOT NULL
+  );
   CREATE TABLE IF NOT EXISTS task_inputs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     task_id TEXT NOT NULL,
@@ -360,6 +367,31 @@ export class TaskManager {
       rubric: { id: context.rubric_id, version: context.rubric_version }, policy_version: context.policy_version,
       pass_score: context.pass_score, report_id: report.id, artifact: { media_type: 'text/html',
         sha256: createHash('sha256').update(bytes).digest('hex'), content_base64: bytes.toString('base64') } };
+  }
+
+  // Call only from a trusted host after the Worker has been isolated from the
+  // host database and evaluator authority. The current local executor does not
+  // provide that boundary, so this is deliberately not wired to afterTurn.
+  persistLessonReviewHandoff(taskId) {
+    const task = this.get(taskId);
+    if (!task || task.status !== 'done') throw new Error('task is not eligible for lesson review');
+    const report = this.db.prepare('SELECT * FROM task_reports WHERE task_id = ? ORDER BY id DESC LIMIT 1').get(taskId);
+    if (!report || !report.structured || report.state !== 'done') throw new Error('structured done report required');
+    const saved = this.getPersistedLessonReviewHandoff(report.id);
+    if (saved) return saved;
+    const handoff = this.lessonReviewHandoff(taskId);
+    return this.transaction(() => {
+      const existing = this.db.prepare('SELECT handoff_json FROM lesson_review_handoffs WHERE report_id = ?').get(handoff.report_id);
+      if (existing) return JSON.parse(existing.handoff_json);
+      this.db.prepare('INSERT INTO lesson_review_handoffs(report_id, task_id, handoff_json, created_at_ms) VALUES (?, ?, ?, ?)')
+        .run(handoff.report_id, taskId, JSON.stringify(handoff), this.now());
+      return handoff;
+    });
+  }
+
+  getPersistedLessonReviewHandoff(reportId) {
+    const row = this.db.prepare('SELECT handoff_json FROM lesson_review_handoffs WHERE report_id = ?').get(reportId);
+    return row ? JSON.parse(row.handoff_json) : null;
   }
 
   addInput(taskId, row, role) {
