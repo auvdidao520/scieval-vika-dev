@@ -9,6 +9,19 @@ import { DatabaseSync, backup } from 'node:sqlite';
 import { spawnSync } from 'node:child_process';
 import { migrateEventArchive, archiveDoneEvent, readArchivedEvent, archiveDoneBatch, hydrateEventRow, rollbackShadowArchiveBatch } from '../src/event-archive.mjs';
 
+test('UPDATE OR REPLACE cannot evict an archived row even without foreign keys', () => {
+  const db = new DatabaseSync(':memory:');
+  try {
+    db.exec(`PRAGMA foreign_keys=OFF; CREATE TABLE connector_events(seq INTEGER PRIMARY KEY, status TEXT, event_json TEXT NOT NULL, connector_instance TEXT, event_id TEXT, UNIQUE(connector_instance,event_id));
+      INSERT INTO connector_events VALUES(1,'DONE','{"original":1}','c','1'),(2,'DONE','{}','c','2')`);
+    migrateEventArchive(db); archiveDoneEvent(db, 1);
+    assert.throws(() => db.exec("UPDATE OR REPLACE connector_events SET connector_instance='c', event_id='1' WHERE seq=2"), /immutable/);
+    assert.throws(() => db.exec('UPDATE OR REPLACE connector_events SET seq=1 WHERE seq=2'), /immutable/);
+    assert.equal(db.prepare('SELECT event_json FROM connector_events WHERE seq=1').get().event_json, '{"original":1}');
+    assert.equal(readArchivedEvent(db, 1), '{"original":1}');
+  } finally { db.close(); }
+});
+
 test('shadow archive survives restart and legacy reader, with transactional rollback', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'event-archive-'));
   const file = path.join(dir, 'state.db');
