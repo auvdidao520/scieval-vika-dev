@@ -59,6 +59,18 @@ describe('Store', () => {
     assert.equal(store.ingest(event('1')).inserted, false);
   });
 
+  it('keeps archived DONE events readable by legacy queries after reopening', () => {
+    const { inbound } = store.ingest(event('archived', 'payload'));
+    const original = store.db.prepare('SELECT event_json FROM connector_events WHERE seq = ?').get(inbound.seq).event_json;
+    assert.equal(store.archiveDoneEvent(inbound.seq), true);
+    store.close();
+    store = new Store(path.join(directory, 'state.sqlite3'), quietLogger);
+    assert.equal(store.readArchivedEvent(inbound.seq), original);
+    assert.equal(store.db.prepare('SELECT event_json FROM connector_events WHERE seq = ?').get(inbound.seq).event_json, original);
+    assert.equal(store.inboundBySeq(inbound.seq).content, 'payload');
+    assert.equal(store.ingest(event('archived', 'payload')).inserted, false);
+  });
+
   it('resolves a quoted message author from inbound history or the journal', () => {
     store.ingest(event('parent', 'original', { senderId: 'ou-author' }));
     assert.deepEqual(store.resolveMessageAuthor('om-parent'), {
@@ -571,15 +583,32 @@ describe('Store', () => {
   });
 
   it('prunes old inbound but keeps the append-only activity ledger', () => {
-    store.ingest(event('old', 'old body'), null, 1_000);
+    store.ingest(event('old', 'old body'), 'filtered', 1_000);
+    store.ingest(event('done', 'retained'), null, 1_000);
     const before = store.listActivities({ limit: 100 }).activities;
     const removed = store.prune(1_000, 10_000);
-    assert.ok(removed.inbound > 0);
+    assert.equal(removed.inbound, 1);
+    assert.equal(store.db.prepare("SELECT count(*) AS n FROM connector_events WHERE status = 'DONE'").get().n, 1);
     assert.equal(store.stats().activities, before.length);
     assert.deepEqual(
       store.listActivities({ limit: 100 }).activities.map((item) => item.id),
       before.map((item) => item.id),
     );
+  });
+
+  it('retains an unreserved old origin and replay identity across cleanup and restarts', () => {
+    const original = event('late-origin', 'original body');
+    const { inbound } = store.ingest(original, null, 1_000);
+    for (let i = 0; i < 2; i++) {
+      store.prune(1_000, 10_000 + i);
+      store.close();
+      store = new Store(path.join(directory, 'state.sqlite3'), quietLogger);
+      const row = store.db.prepare('SELECT * FROM connector_events WHERE seq = ?').get(inbound.seq);
+      assert.equal(row.status, 'DONE');
+      assert.equal(row.content, 'original body');
+      assert.equal(JSON.parse(row.event_json).id, 'evt-late-origin');
+      assert.equal(store.ingest(original).inserted, false);
+    }
   });
 });
 

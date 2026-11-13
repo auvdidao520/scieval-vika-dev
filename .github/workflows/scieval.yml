@@ -1,0 +1,27 @@
+name: SciEval prototype checks
+on:
+  pull_request:
+  push:
+    branches: [main, 'task/t74-daemon-recovery']
+permissions:
+  contents: read
+jobs:
+  prototype:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.22.2'
+          cache: npm
+          cache-dependency-path: vika/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: npm ci --no-audit --no-fund
+        working-directory: vika
+      - run: node --test packages/daemon/test/config.test.mjs packages/daemon/test/scieval-*.test.mjs
+        working-directory: vika
+      - run: python3 -m unittest discover -s tests -v
+        working-directory: scieval-vika-p0
