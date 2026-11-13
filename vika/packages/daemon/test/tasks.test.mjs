@@ -63,6 +63,48 @@ function setup(t, options = {}) {
 }
 
 describe('TaskManager', () => {
+  it('persists a host-captured handoff across manager restart and artifact changes', async (t) => {
+    const { tasks, executor, db, inbox, workspace } = setup(t);
+    const task = tasks.create({ rows: [row()], title: 'lesson', runtime: 'pi' });
+    tasks.bindLessonContext(task.id, { lessonId: 'lesson', jobId: 'job', round: 1, rubricId: 'rubric',
+      rubricVersion: 'v1', policyVersion: 'p1', passScore: 2, artifactPath: 'revised.html' });
+    const artifact = path.join(task.workdir, 'revised.html');
+    fs.writeFileSync(artifact, '<p>original</p>');
+    tasks.report(task.id, { state: 'done' });
+    executor.turns[0].finish();
+    await settle();
+    const captured = tasks.persistLessonReviewHandoff(task.id);
+    fs.unlinkSync(artifact);
+    const restarted = new TaskManager({ db, config: { workspace }, executor, inbox, lineFor: () => '' });
+    t.after(() => restarted.shutdown());
+    assert.deepEqual(restarted.getPersistedLessonReviewHandoff(captured.report_id), captured);
+    assert.deepEqual(restarted.persistLessonReviewHandoff(task.id), captured);
+    assert.equal(Buffer.from(captured.artifact.content_base64, 'base64').toString(), '<p>original</p>');
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM lesson_review_handoffs').get().n, 1);
+  });
+
+  it('binds host lesson context once and captures only the prescribed task artifact', async (t) => {
+    const { tasks, executor } = setup(t);
+    const task = tasks.create({ rows: [row()], title: 'lesson', runtime: 'pi' });
+    const context = { lessonId: 'lesson', jobId: 'job', round: 2, rubricId: 'rubric', rubricVersion: 'v1', policyVersion: 'p1', passScore: 2, artifactPath: 'revised.html' };
+    assert.throws(() => tasks.bindLessonContext(task.id, { ...context, artifactPath: '../other.html' }), /artifact path/);
+    tasks.bindLessonContext(task.id, context);
+    assert.throws(() => tasks.bindLessonContext(task.id, { ...context, jobId: 'forged' }));
+    fs.writeFileSync(path.join(task.workdir, 'revised.html'), '<p>水</p>');
+    assert.throws(() => tasks.lessonReviewHandoff(task.id), /eligible/);
+    tasks.report(task.id, { state: 'done', artifacts: ['/etc/passwd', 'other.html'] });
+    executor.turns[0].finish({ text: '' });
+    await settle();
+    const handoff = tasks.lessonReviewHandoff(task.id);
+    assert.equal(handoff.job_id, 'job');
+    assert.equal(handoff.lesson_id, 'lesson');
+    assert.equal(handoff.round, 2);
+    assert.equal(Buffer.from(handoff.artifact.content_base64, 'base64').toString(), '<p>水</p>');
+    fs.rmSync(path.join(task.workdir, 'revised.html'));
+    fs.symlinkSync('/etc/passwd', path.join(task.workdir, 'revised.html'));
+    assert.throws(() => tasks.lessonReviewHandoff(task.id), /symlinks/);
+  });
+
   it('does not leave a runnable task with a partially recorded request', (t) => {
     const { tasks, db, executor } = setup(t);
     db.exec("CREATE TRIGGER fail_input BEFORE INSERT ON task_inputs WHEN NEW.text LIKE '%FAIL_INPUT%' BEGIN SELECT RAISE(ABORT, 'injected input failure'); END;");
