@@ -44,3 +44,5 @@ python3 scieval-evaluator/review_worker.py revised.html --task-id t1 --job-id le
 ```
 
 示例阈值仅用于演示，不代表已确认的验收标准。当前交接需要可信宿主手动调用并提供真实任务 ID、作业 ID 和轮次，尚未从 Vika Worker 完成事件自动接收文件，也没有自动回派或轮次控制。原生 `task_route` 接受已认证的输入事件，并不是任意评测报告投递接口；不能伪造事件来回派。需要与 Vika 宿主约定可信交接方式后接线。报告中的定位只做非空检查，文字证据只检查是否在 HTML 源码中，没有渲染检查；量表、模型、阈值均未校准，也没有教师确认或发布集成。
+
+Vika 宿主可通过 `TaskManager.bindLessonContext` 一次性绑定教案、作业、轮次、量表、策略、试点评分线和任务目录内的预定 HTML 路径；Worker 的报告不能设置这些字段。任务以结构化 `done` 结束后，宿主调用 `lessonReviewHandoff` 捕获该路径的 HTML 字节及摘要，再在可信进程内将其交给 `review_host_handoff`。此对象本身没有签名，不得从 Worker 或不可信网络接收；宿主负责认证和传递。接口尚未接入生产生命周期，需宿主显式调用，不会自动回评或派工。这里的信任边界是进程级调用边界，不是同一操作系统账户之间的隔离；生产部署须隔离 Worker 对数据库及宿主进程的写权限。评分仍仅供参考，最终决策始终为 `human_review`。

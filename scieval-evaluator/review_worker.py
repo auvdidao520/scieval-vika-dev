@@ -4,6 +4,8 @@ This is an explicit handoff called by a trusted host, not a task scheduler or a
 Worker completion listener. The caller supplies the task identity and policy.
 """
 import argparse
+import base64
+import binascii
 import hashlib
 import json
 from pathlib import Path
@@ -13,7 +15,7 @@ from http_evaluator import HttpEvaluator
 
 
 def review_worker_artifact(client, *, task_id, job_id, round_number, html_path,
-                           rubric, policy_version, pass_score):
+                           rubric, policy_version, pass_score, artifact_bytes=None, artifact_uri=None):
     if not isinstance(task_id, str) or not task_id.strip():
         raise ValueError('task_id is required')
     if not isinstance(job_id, str) or not job_id.strip():
@@ -26,17 +28,25 @@ def review_worker_artifact(client, *, task_id, job_id, round_number, html_path,
         raise ValueError('rubric id and version are required')
     if not isinstance(policy_version, str) or not policy_version:
         raise ValueError('policy version is required')
-    path = Path(html_path)
-    if path.is_symlink() or not path.is_file():
-        raise ValueError('artifact must be a regular, non-symlink file')
-    raw = path.read_bytes()
+    if artifact_bytes is None:
+        path = Path(html_path)
+        if path.is_symlink() or not path.is_file():
+            raise ValueError('artifact must be a regular, non-symlink file')
+        raw = path.read_bytes()
+        uri = str(path)
+    else:
+        if not isinstance(artifact_bytes, bytes) or not isinstance(artifact_uri, str) or not artifact_uri:
+            raise ValueError('invalid captured artifact')
+        raw, uri = artifact_bytes, artifact_uri
     raw.decode('utf-8')
     digest = hashlib.sha256(raw).hexdigest()
-    request = {'job_id': job_id, 'round': round_number, 'uri': str(path),
+    request = {'job_id': job_id, 'round': round_number, 'uri': uri,
                'sha256': digest, 'rubric': rubric, 'policy_version': policy_version}
+    if artifact_bytes is not None:
+        request['content_bytes'] = raw
     # Bind task and policy to the same evaluation request on retries. A changed
     # artifact or policy produces a different key and a separately linked report.
-    key_data = [task_id, job_id, round_number, digest, rubric, policy_version, pass_score]
+    key_data = [task_id, job_id, round_number, digest, rubric, policy_version, pass_score, uri]
     key = hashlib.sha256(json.dumps(key_data, sort_keys=True, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
     evaluation_id = client.submit(request, key)
     report = client.query(evaluation_id)
@@ -68,6 +78,37 @@ def review_worker_artifact(client, *, task_id, job_id, round_number, html_path,
             'rubric': rubric, 'policy_version': policy_version,
             'pass_score': pass_score, 'recommendation': recommendation,
             'decision': 'human_review', 'criteria': results, 'report': report}
+
+
+def review_host_handoff(client, handoff):
+    """Consume only a handoff obtained directly from the trusted Vika host.
+
+    This object is not authenticated on its own; never accept it from a Worker
+    or an untrusted network endpoint. The host binds policy and captures bytes.
+    """
+    if not isinstance(handoff, dict):
+        raise ValueError('invalid host handoff')
+    lesson_id, report_id = handoff.get('lesson_id'), handoff.get('report_id')
+    if not isinstance(lesson_id, str) or not lesson_id.strip() or type(report_id) is not int or report_id < 1:
+        raise ValueError('invalid lesson or report identity')
+    artifact = handoff.get('artifact')
+    if not isinstance(artifact, dict) or artifact.get('media_type') != 'text/html':
+        raise ValueError('invalid artifact')
+    try:
+        raw = base64.b64decode(artifact['content_base64'], validate=True)
+    except (KeyError, ValueError, TypeError, binascii.Error) as error:
+        raise ValueError('invalid artifact content') from error
+    if len(raw) > 5 * 1024 * 1024 or hashlib.sha256(raw).hexdigest() != artifact.get('sha256'):
+        raise ValueError('artifact digest or size mismatch')
+    raw.decode('utf-8')
+    uri = f"vika-task:{handoff.get('task_id')}:report:{report_id}"
+    result = review_worker_artifact(client, task_id=handoff.get('task_id'), job_id=handoff.get('job_id'),
+        round_number=handoff.get('round'), html_path=None, rubric=handoff.get('rubric'),
+        policy_version=handoff.get('policy_version'), pass_score=handoff.get('pass_score'),
+        artifact_bytes=raw, artifact_uri=uri)
+    result['lesson_id'] = lesson_id
+    result['report_id'] = report_id
+    return result
 
 
 def main():

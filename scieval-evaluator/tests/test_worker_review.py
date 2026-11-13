@@ -8,7 +8,7 @@ from http.server import HTTPServer
 from pathlib import Path
 
 from http_evaluator import HttpEvaluator
-from review_worker import review_worker_artifact
+from review_worker import review_worker_artifact, review_host_handoff
 from server import make_handler
 from test_workflow import Model
 
@@ -34,6 +34,18 @@ class WorkerReviewTests(unittest.TestCase):
             client = HttpEvaluator(f'http://127.0.0.1:{server.server_port}', str(token))
             args = dict(task_id='t1', job_id='lesson-1', round_number=2, html_path=html,
                         rubric={'id':'scieval-equip-13','version':'draft-1'}, policy_version='draft-1', pass_score=3)
+            import base64
+            raw = html.read_bytes()
+            handoff = {'task_id': 't1', 'lesson_id': 'lesson', 'job_id': 'lesson-1', 'round': 2,
+                       'rubric': args['rubric'], 'policy_version': 'draft-1', 'pass_score': 3, 'report_id': 1,
+                       'artifact': {'media_type': 'text/html', 'sha256': hashlib.sha256(raw).hexdigest(),
+                                    'content_base64': base64.b64encode(raw).decode()}}
+            host_result = review_host_handoff(client, handoff)
+            self.assertEqual((host_result['lesson_id'], host_result['report_id'], host_result['decision']), ('lesson', 1, 'human_review'))
+            bad = {**handoff, 'artifact': {**handoff['artifact'], 'sha256': '0' * 64}}
+            with self.assertRaises(ValueError): review_host_handoff(client, bad)
+            self.assertEqual(review_host_handoff(client, handoff)['evaluation_id'], host_result['evaluation_id'])
+            Model.calls = 0
             result = review_worker_artifact(client, **args)
             retry = review_worker_artifact(client, **args)
             self.assertEqual(Model.calls, 1)

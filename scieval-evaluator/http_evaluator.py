@@ -88,10 +88,15 @@ class HttpEvaluator:
             raise ValueError('invalid job id')
         if not isinstance(idempotency_key, str) or not idempotency_key or len(idempotency_key) > 256:
             raise ValueError('invalid idempotency key')
-        path = Path(request['uri'])
-        if path.is_symlink() or not path.is_file():
-            raise ValueError('artifact must be a regular, non-symlink file')
-        content = path.read_bytes()
+        if 'content_bytes' in request:
+            content = request['content_bytes']
+            if not isinstance(content, bytes):
+                raise ValueError('artifact bytes required')
+        else:
+            path = Path(request['uri'])
+            if path.is_symlink() or not path.is_file():
+                raise ValueError('artifact must be a regular, non-symlink file')
+            content = path.read_bytes()
         if len(content) > MAX_ARTIFACT_BYTES:
             raise ValueError('artifact is too large')
         if hashlib.sha256(content).hexdigest() != request['sha256']:
