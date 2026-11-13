@@ -9,6 +9,7 @@ import { AgentRuntime } from './agent-runtime.mjs';
 import { Harness } from './harness.mjs';
 import { MessageInbox } from './inbox.mjs';
 import { TaskManager } from './tasks.mjs';
+import { startReservationGateway } from './scieval-gateway.mjs';
 import { WorkerExecutor } from './worker-executor.mjs';
 import { formatInboundLine, resolveReplyTarget } from './runtime-input.mjs';
 import { getRuntimeDefinition } from './runtime-catalog.mjs';
@@ -79,6 +80,7 @@ export class PersonalAgentDaemon {
     // The runtime explicit_silence_not_applied last checked, to warn once per switch.
     this.silenceRuntime = null;
     this.httpServer = null;
+    this.scievalGateway = null;
     this.startedAt = Date.now();
     this.ready = false;
     this.shuttingDown = false;
@@ -442,6 +444,12 @@ export class PersonalAgentDaemon {
         status: 'RUNNING',
       }, 'subscriber-started');
 
+      if (this.config.scievalGatewayConfigFile) {
+        if (!this.tasks) throw new Error('SciEval gateway requires VIKA_SCHEDULER=workers');
+        const gatewayConfig = JSON.parse(fs.readFileSync(this.config.scievalGatewayConfigFile, 'utf8'));
+        const { socketDir, lockDir, grants, rootUri, ovBin } = gatewayConfig;
+        this.scievalGateway = await startReservationGateway({ tasks: this.tasks, socketDir, lockDir, grants, rootUri, ovBin });
+      }
       this.ready = true;
       this.chatNames.refresh();
       this.maintenanceTimer = setInterval(() => this.runMaintenance(), 86_400_000);
@@ -607,6 +615,10 @@ export class PersonalAgentDaemon {
       } catch (error) {
         this.logger.warn('meeting_stop_failed', { error });
       }
+      try { await this.scievalGateway?.close(); } catch (error) {
+        this.logger.warn('scieval_gateway_stop_failed', { error: safeError(error) });
+      }
+      this.scievalGateway = null;
       this.tasks?.shutdown();
       this.harness?.stop();
       // Give an in-flight turn a bounded chance to finish before the backends
