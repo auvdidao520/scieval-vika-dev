@@ -59,6 +59,18 @@ describe('Store', () => {
     assert.equal(store.ingest(event('1')).inserted, false);
   });
 
+  it('keeps archived DONE events readable by legacy queries after reopening', () => {
+    const { inbound } = store.ingest(event('archived', 'payload'));
+    const original = store.db.prepare('SELECT event_json FROM connector_events WHERE seq = ?').get(inbound.seq).event_json;
+    assert.equal(store.archiveDoneEvent(inbound.seq), true);
+    store.close();
+    store = new Store(path.join(directory, 'state.sqlite3'), quietLogger);
+    assert.equal(store.readArchivedEvent(inbound.seq), original);
+    assert.equal(store.db.prepare('SELECT event_json FROM connector_events WHERE seq = ?').get(inbound.seq).event_json, original);
+    assert.equal(store.inboundBySeq(inbound.seq).content, 'payload');
+    assert.equal(store.ingest(event('archived', 'payload')).inserted, false);
+  });
+
   it('resolves a quoted message author from inbound history or the journal', () => {
     store.ingest(event('parent', 'original', { senderId: 'ou-author' }));
     assert.deepEqual(store.resolveMessageAuthor('om-parent'), {

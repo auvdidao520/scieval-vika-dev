@@ -15,6 +15,7 @@ import { MeetingStore, migrateMeetingStore } from './meeting/store.mjs';
 import { migrateCardMessages, acceptCardAnswer } from './card-messages.mjs';
 import { migrateApprovals, pruneApprovals } from './approvals.mjs';
 import { normalizeEvent, eventIdentity } from './event.mjs';
+import { migrateEventArchive, archiveDoneEvent, readArchivedEvent } from './event-archive.mjs';
 
 function number(value) {
   return typeof value === 'bigint' ? Number(value) : value;
@@ -182,6 +183,7 @@ export class Store {
     this.db.exec('PRAGMA foreign_keys = ON');
     this.db.exec('PRAGMA busy_timeout = 5000');
     this.migrate();
+    migrateEventArchive(this.db);
     this.prepare();
     this.meetings = new MeetingStore(this.db, (fn) => this.transaction(fn));
   }
@@ -761,6 +763,15 @@ export class Store {
       try { this.db.exec('ROLLBACK'); } catch {}
       throw error;
     }
+  }
+
+  // A shadow copy can be inspected without affecting old readers or hot data.
+  archiveDoneEvent(seq) {
+    return this.transaction(() => archiveDoneEvent(this.db, seq));
+  }
+
+  readArchivedEvent(seq) {
+    return readArchivedEvent(this.db, seq);
   }
 
   // One event ledger for all sources. Chat columns are nullable indexes into the
