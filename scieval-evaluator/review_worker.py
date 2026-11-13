@@ -1,7 +1,7 @@
 """Submit a Vika Worker's revised HTML to SciEval for teaching review.
 
-This is an explicit handoff called by a trusted host, not a task scheduler or a
-Worker completion listener. The caller supplies the task identity and policy.
+This handoff is called by a trusted host (including the opt-in Vika afterTurn
+adapter). The caller supplies task identity and policy and owns scheduling.
 """
 import argparse
 import base64
@@ -70,8 +70,8 @@ def review_worker_artifact(client, *, task_id, job_id, round_number, html_path,
         results.append({'criterion_id': item['criterion_id'], 'result': outcome,
                         'score': item['score'], 'evidence': evidence,
                         'reasoning': item['reasoning'], 'recommendations': item['recommendations']})
-    # Thresholds and the draft model are not calibrated; never publish or
-    # automatically reassign work based on this provisional recommendation.
+    # Thresholds and the draft model are not calibrated. The opt-in host may
+    # use recommendations for bounded revisions; publication still needs a teacher.
     recommendation = 'human_review' if any(x['result'] == 'human_review' for x in results) else ('revise' if any(x['result'] == 'revise' for x in results) else 'pass')
     return {'task_id': task_id, 'job_id': job_id, 'round': round_number,
             'artifact_sha256': digest, 'evaluation_id': evaluation_id,

@@ -2,7 +2,7 @@
 
 提供 `POST /v1/evaluations` 和 `GET /v1/evaluations/{evaluation_id}`，兼容已有的 `HttpEvaluator` 请求/报告格式。服务接收 UTF-8 HTML、校验摘要，调用配置的 OpenAI 兼容 chat completions 模型，返回 13 项报告，并检查证据文字是否出现在输入 HTML。相同幂等键与相同请求返回同一报告，不同请求返回 409；报告和键保存在本地 SQLite。只启动一个服务实例使用同一数据库。单线程同步处理，模型超时或格式、证据无效返回 502，不保存失败结果，可用同一键重试。意外崩溃发生在模型调用后、结果写入前时可能重复调用模型。
 
-量表目前只有项目草案的维度名称，并非经过确认的完整评分锚点。文字匹配不能证明定位或教学判断正确，报告始终为 `human_review`，须教师复核。此服务不自动改稿、发布，也未接入 Vika TaskManager。HTML 内容会发送给配置的模型服务，请只选可处理该材料的服务。接口仅监听本机，token 和数据库需要由运行者妥善保护；不要把真实材料或密钥提交到仓库。
+量表目前只有项目草案的维度名称，并非经过确认的完整评分锚点。文字匹配不能证明定位或教学判断正确，报告始终为 `human_review`，须教师复核。此服务自身不改稿或发布；下文的可选 TaskManager 适配会在 Worker 完成后调用它复评并安排有限轮返修。HTML 内容会发送给配置的模型服务，请只选可处理该材料的服务。接口仅监听本机，token 和数据库需要由运行者妥善保护；不要把真实材料或密钥提交到仓库。
 
 需要 Python 3.10+ 和支持 `response_format: json_object` 的模型服务。准备独立的本地接口 token 文件，并通过环境变量提供模型 token。两个 token 不应相同。
 
@@ -64,3 +64,11 @@ is provisioned by this change.
 SciEval 公布的评分编码为 0=N/A、1=Inadequate、2=Adequate、3=Extensive（[数据说明](https://github.com/SciEval-Benchmark/SciEval/blob/main/index.html)）。交接中 0 转人工复核，不作为通过或待修改；阈值只能选 1–3。当前提示词仍只有指标名称，没有完整的逐项锚点，也没有经过 SciEval 标注数据验证。公开项目说明其数据需申请，因此本原型不能宣称评分已对齐或经过基准验证。
 
 `HttpEvaluator.classify_feedback(request, feedback, idempotency_key)` 复用评测上传的 HTML 字节、摘要和 rubric，通过现有 HTTP 接口提交反馈，并校验返回的作业、摘要、rubric 和状态。它是分类客户端，不会触发派工或复评；调用方仍须验证反馈来源并使用稳定的事件幂等键。
+
+## afterTurn 试运行
+
+宿主可为 `TaskManager` 配置 `lessonReview: {script, url, tokenFile}`，或为 daemon 设置 `SCIEVAL_HOST_REVIEW_SCRIPT`（`host_review.py` 绝对路径）、`SCIEVAL_URL` 和 `SCIEVAL_TOKEN_FILE`。可信宿主代码还必须在 Worker 完成前调用 `bindLessonContext`，指定任务内的 HTML 路径、作业、轮次、rubric、策略和试点阈值。只有绑定的任务才会进入该流程；当前没有面向教师的绑定入口。
+
+结构化 done 后，afterTurn 捕获 HTML，调用 `host_review.py` 和现有 HTTP 评测接口。`revise` 把未通过项作为上下文交给同一原生任务继续修改，最多回派两次；`pass`、无法判断、达到轮次上限均交人工复核。评测失败时标记 blocked，不报告通过。示例和集成测试使用假教案和假评测服务，评分编码沿用 0=N/A、1–3，13 个 ID 沿用仓库定义；完整评分锚点、渲染检查和真实评测质量尚未验证。人工确认和发布也未接入，不能把该试运行当作生产可用功能。
+
+当前 Worker 与宿主共享操作系统权限，绑定和快照不能防止 Worker 篡改宿主数据库；真实材料使用前须建立隔离。进程在评测中重启会恢复任务重新执行，尚无完整的跨进程评测恢复。评测等待期间仍占用原生任务槽，新到的请求先交 Worker 处理再复评；停止任务后丢弃在途评测结果。适配器进程最多运行 180 秒。

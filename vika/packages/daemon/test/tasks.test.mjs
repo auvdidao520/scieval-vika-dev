@@ -407,3 +407,150 @@ describe('TaskManager', () => {
     });
   }
 });
+
+describe('lesson review afterTurn', () => {
+  async function waitFor(predicate) {
+    for (let i = 0; i < 300; i++) {
+      if (predicate()) return;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.fail('timed out waiting for lesson review');
+  }
+
+  it('sends actual HTML through host_review and runs a native revision before teacher review', async (t) => {
+    const http = await import('node:http');
+    const received = [];
+    const criteria = ['I.A', 'I.B.1', 'I.B.2', 'I.B.3', 'I.C', 'II.A', 'II.B', 'II.C', 'III.A', 'III.B', 'III.C', 'III.D', 'III.E'];
+    let payload;
+    const server = http.createServer((req, res) => {
+      res.setHeader('Content-Type', 'application/json');
+      if (req.method === 'POST') {
+        let body = '';
+        req.on('data', (chunk) => { body += chunk; });
+        req.on('end', () => { payload = JSON.parse(body); received.push(Buffer.from(payload.artifact.content_base64, 'base64').toString()); res.end(JSON.stringify({ evaluation_id: 'ev' + received.length })); });
+      } else {
+        const score = received.length === 1 ? 1 : 2;
+        const quote = received.at(-1).includes('改进') ? '改进' : '初稿';
+        res.end(JSON.stringify({ status: 'succeeded', report: { schema_version: '1.0', evaluation_id: 'ev' + received.length,
+          job_id: payload.job_id, round: payload.round, input_uri: payload.artifact.uri, input_sha256: payload.artifact.sha256,
+          rubric_id: payload.rubric.id, rubric_version: payload.rubric.version, policy_version: payload.policy_version,
+          evaluator_version: 'fake', created_at: 'now', criteria: criteria.map((criterion_id) => ({ criterion_id, status: 'scored', score,
+            evidence: [{ quote, locator: 'p' }], reasoning: 'fake', recommendations: ['补充'] })), decision: { result: 'human_review', reason: 'fake' } } }));
+      }
+    });
+    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+    t.after(() => server.close());
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'review-token-'));
+    t.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
+    const token = path.join(tmp, 'token'); fs.writeFileSync(token, 'test');
+    const script = fileURLToPath(new URL('../../../../scieval-evaluator/host_review.py', import.meta.url));
+    const { tasks, executor, relayed } = setup(t);
+    // Configure the same adapter used by the daemon, through a second manager's config.
+    const { db, inbox, workspace } = { db: tasks.db, inbox: tasks.inbox, workspace: tasks.config.workspace };
+    const manager = new TaskManager({ db, inbox, executor, lineFor: (input) => input.content,
+      config: { workspace, lessonReview: { script, url: `http://127.0.0.1:${server.address().port}`, tokenFile: token } } });
+    t.after(() => manager.shutdown());
+    const task = manager.create({ rows: [row()], title: 'lesson' });
+    manager.bindLessonContext(task.id, { lessonId: 'lesson', jobId: 'job', round: 1, rubricId: 'scieval-equip-13', rubricVersion: 'draft-1', policyVersion: 'draft-1', passScore: 2, artifactPath: 'lesson.html' });
+    fs.writeFileSync(path.join(task.workdir, 'lesson.html'), '<p>初稿</p>');
+    manager.report(task.id, { state: 'done' }); executor.turns[0].finish();
+    await waitFor(() => executor.turns.length === 2);
+    assert.match(executor.turns[1].prompt, /I\.A/);
+    assert.equal(relayed.length, 0);
+    fs.writeFileSync(path.join(task.workdir, 'lesson.html'), '<p>改进</p>');
+    manager.report(task.id, { state: 'done' }); executor.turns[1].finish();
+    await waitFor(() => relayed.length === 1);
+    assert.deepEqual(received, ['<p>初稿</p>', '<p>改进</p>']);
+    assert.match(relayed[0].item.text, /SciEval recommendation: pass/);
+    assert.match(relayed[0].item.text, /Teacher review required/);
+    assert.equal(manager.get(task.id).status, 'waiting');
+    assert.match(manager.get(task.id).draft, /Teacher review required/);
+    assert.equal(manager.get(task.id).question, '请教师复核修订后的教案。');
+  });
+
+  it('keeps the task occupied during review and incorporates a new owner request before relaying', async (t) => {
+    let resolveReview;
+    let handoff;
+    const { tasks, executor, relayed } = setup(t, { lessonReviewer: (h) => {
+      handoff = h;
+      return new Promise((resolve) => { resolveReview = resolve; });
+    } });
+    const task = tasks.create({ rows: [row()], title: 'lesson' });
+    tasks.bindLessonContext(task.id, { lessonId: 'l', jobId: 'j', round: 1, rubricId: 'scieval-equip-13', rubricVersion: 'draft-1', policyVersion: 'draft-1', passScore: 2, artifactPath: 'lesson.html' });
+    fs.writeFileSync(path.join(task.workdir, 'lesson.html'), '<p>假教案</p>');
+    tasks.report(task.id, { state: 'done' }); executor.turns[0].finish();
+    await waitFor(() => handoff);
+    tasks.route(task.id, [row({ content: 'NEW_REQUEST: add exercise' })], 'owner');
+    assert.equal(executor.turns.length, 1, 'review holds the native task slot');
+    resolveReview({ ...handoff, artifact_sha256: handoff.artifact.sha256, recommendation: 'pass', criteria: [] });
+    await waitFor(() => executor.turns.length === 2);
+    assert.equal(relayed.length, 0, 'an obsolete review must not reach the teacher');
+    assert.match(executor.turns[1].prompt, /NEW_REQUEST/);
+  });
+
+  it('does not revive a stopped task when an in-flight evaluation returns', async (t) => {
+    let resolveReview;
+    let handoff;
+    const { tasks, executor, relayed } = setup(t, { lessonReviewer: (h) => {
+      handoff = h;
+      return new Promise((resolve) => { resolveReview = resolve; });
+    } });
+    const task = tasks.create({ rows: [row()], title: 'lesson' });
+    tasks.bindLessonContext(task.id, { lessonId: 'l', jobId: 'j', round: 1, rubricId: 'scieval-equip-13', rubricVersion: 'draft-1', policyVersion: 'draft-1', passScore: 2, artifactPath: 'lesson.html' });
+    fs.writeFileSync(path.join(task.workdir, 'lesson.html'), '<p>假教案</p>');
+    tasks.report(task.id, { state: 'done' }); executor.turns[0].finish();
+    await waitFor(() => handoff);
+    tasks.stop(task.id);
+    resolveReview({ ...handoff, artifact_sha256: handoff.artifact.sha256, recommendation: 'pass', criteria: [] });
+    await settle();
+    assert.equal(tasks.get(task.id).status, 'stopped');
+    assert.equal(relayed.length, 0);
+  });
+
+  it('blocks an unstructured completion instead of bypassing a bound lesson review', async (t) => {
+    const { tasks, executor, relayed } = setup(t, { lessonReviewer: async () => assert.fail('invalid completion') });
+    const task = tasks.create({ rows: [row()], title: 'lesson' });
+    tasks.bindLessonContext(task.id, { lessonId: 'l', jobId: 'j', round: 1, rubricId: 'scieval-equip-13', rubricVersion: 'draft-1', policyVersion: 'draft-1', passScore: 2, artifactPath: 'lesson.html' });
+    executor.turns[0].finish({ text: 'unreviewed lesson is complete' });
+    await waitFor(() => relayed.length === 1);
+    assert.equal(tasks.get(task.id).status, 'blocked');
+    assert.doesNotMatch(tasks.get(task.id).draft, /unreviewed lesson/);
+  });
+
+  it('holds uncertain results for the teacher and rejects a mismatched review', async (t) => {
+    for (const mismatch of [false, true]) {
+      const { tasks, executor, relayed } = setup(t, { lessonReviewer: async (h) => ({
+        task_id: mismatch ? 'another-task' : h.task_id, job_id: h.job_id, round: h.round, report_id: h.report_id,
+        artifact_sha256: h.artifact.sha256, recommendation: 'human_review', criteria: [{ criterion_id: 'I.A', score: 0, result: 'human_review' }],
+      }) });
+      const task = tasks.create({ rows: [row()], title: 'lesson' });
+      tasks.bindLessonContext(task.id, { lessonId: 'l', jobId: 'j', round: 7, rubricId: 'scieval-equip-13', rubricVersion: 'draft-1', policyVersion: 'draft-1', passScore: 2, artifactPath: 'lesson.html' });
+      fs.writeFileSync(path.join(task.workdir, 'lesson.html'), '<p>假教案</p>');
+      tasks.report(task.id, { state: 'done' }); executor.turns[0].finish();
+      await waitFor(() => relayed.length === 1);
+      assert.equal(tasks.get(task.id).status, mismatch ? 'blocked' : 'waiting');
+      assert.equal(executor.turns.length, 1);
+      assert.doesNotMatch(relayed[0].item.text, /recommendation: pass/);
+    }
+  });
+
+  it('caps revisions at two and blocks when evaluation fails', async (t) => {
+    for (const fail of [false, true]) {
+      const reviewer = async (h) => {
+        if (fail) throw new Error('offline');
+        return { task_id: h.task_id, job_id: h.job_id, round: h.round, report_id: h.report_id,
+          artifact_sha256: h.artifact.sha256, recommendation: 'revise', criteria: [{ criterion_id: 'I.A', result: 'revise' }] };
+      };
+      const { tasks, executor, relayed } = setup(t, { lessonReviewer: reviewer });
+      const task = tasks.create({ rows: [row()], title: 'lesson' });
+      tasks.bindLessonContext(task.id, { lessonId: 'l', jobId: 'j', round: 7, rubricId: 'scieval-equip-13', rubricVersion: 'draft-1', policyVersion: 'draft-1', passScore: 2, artifactPath: 'lesson.html' });
+      fs.writeFileSync(path.join(task.workdir, 'lesson.html'), '<p>假教案</p>');
+      for (let i = 0; i < (fail ? 1 : 3); i++) {
+        tasks.report(task.id, { state: 'done' }); executor.turns[i].finish();
+        await waitFor(() => fail || i === 2 ? relayed.length === 1 : executor.turns.length > i + 1);
+      }
+      assert.equal(executor.turns.length, fail ? 1 : 3);
+      assert.match(relayed[0].item.text, fail ? /复评失败/ : /Revision limit reached/);
+    }
+  });
+});
