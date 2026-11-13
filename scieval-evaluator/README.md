@@ -62,3 +62,5 @@ is provisioned by this change.
 
 
 SciEval 公布的评分编码为 0=N/A、1=Inadequate、2=Adequate、3=Extensive（[数据说明](https://github.com/SciEval-Benchmark/SciEval/blob/main/index.html)）。交接中 0 转人工复核，不作为通过或待修改；阈值只能选 1–3。当前提示词仍只有指标名称，没有完整的逐项锚点，也没有经过 SciEval 标注数据验证。公开项目说明其数据需申请，因此本原型不能宣称评分已对齐或经过基准验证。
+
+`HttpEvaluator.classify_feedback(request, feedback, idempotency_key)` 复用评测上传的 HTML 字节、摘要和 rubric，通过现有 HTTP 接口提交反馈，并校验返回的作业、摘要、rubric 和状态。它是分类客户端，不会触发派工或复评；调用方仍须验证反馈来源并使用稳定的事件幂等键。

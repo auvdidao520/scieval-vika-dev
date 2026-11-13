@@ -12,9 +12,40 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from server import make_handler
+from http_evaluator import HttpEvaluator, EvaluatorError
 
 
 class FeedbackHTTPTests(unittest.TestCase):
+    def test_client_classifies_captured_html_and_checks_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            dbpath = str(Path(tmp) / 'db')
+            with sqlite3.connect(dbpath) as db:
+                db.execute('CREATE TABLE feedback_classifications (key TEXT PRIMARY KEY, digest TEXT NOT NULL, result TEXT NOT NULL)')
+            server = HTTPServer(('127.0.0.1', 0), make_handler(dbpath, 'secret', 'http://localhost', 'model', 'test'))
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            self.addCleanup(server.server_close)
+            self.addCleanup(server.shutdown)
+            token = Path(tmp) / 'token'; token.write_text('secret')
+            raw = '<p>实验步骤</p>'.encode()
+            request = {'job_id':'job', 'round':1, 'uri':'lesson.html', 'content_bytes':raw,
+                       'sha256':hashlib.sha256(raw).hexdigest(),
+                       'rubric':{'id':'scieval-equip-13','version':'draft-1'}, 'policy_version':'draft-1'}
+            result = {'job_id':'job', 'input_sha256':request['sha256'], 'rubric':request['rubric'],
+                      'status':'human_review', 'issues':[], 'clarification':''}
+            client = HttpEvaluator(f'http://127.0.0.1:{server.server_port}', str(token))
+            with patch('feedback.classify', return_value=result) as classify:
+                self.assertEqual(client.classify_feedback(request, '实验步骤有误', 'event-1'), result)
+                self.assertEqual(client.classify_feedback(request, '实验步骤有误', 'event-1'), result)
+                self.assertEqual(classify.call_count, 1)
+                with self.assertRaises(EvaluatorError):
+                    client.classify_feedback(request, '其他反馈', 'event-1')
+                with self.assertRaises(ValueError):
+                    client.classify_feedback(request, '', 'event-2')
+            wrong = dict(result, job_id='different')
+            with patch('feedback.classify', return_value=wrong):
+                with self.assertRaisesRegex(EvaluatorError, 'identity'):
+                    client.classify_feedback(request, '实验步骤有误', 'event-2')
+
     def test_idempotency_conflict_and_failed_retry(self):
         with tempfile.TemporaryDirectory() as tmp:
             dbpath = str(Path(tmp) / 'db')

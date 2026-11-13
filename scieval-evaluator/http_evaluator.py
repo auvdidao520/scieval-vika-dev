@@ -80,7 +80,7 @@ class HttpEvaluator:
             raise EvaluatorError('evaluator response must be a JSON object')
         return parsed, raw
 
-    def submit(self, request: dict, idempotency_key: str) -> str:
+    def _payload(self, request: dict, idempotency_key: str) -> dict:
         required = ('job_id', 'round', 'uri', 'sha256')
         if any(key not in request for key in required):
             raise ValueError('missing request field')
@@ -116,6 +116,24 @@ class HttpEvaluator:
             'rubric': request.get('rubric', {'id': 'scieval-equip-13', 'version': 'draft-1'}),
             'policy_version': request.get('policy_version', 'draft-1'),
         }
+        return payload
+
+    def classify_feedback(self, request: dict, feedback: str, idempotency_key: str) -> dict:
+        """Classify feedback against the same captured HTML and rubric as evaluation."""
+        if not isinstance(feedback, str) or not feedback.strip() or len(feedback) > 10000:
+            raise ValueError('invalid feedback')
+        payload = self._payload(request, idempotency_key)
+        payload['feedback'] = feedback
+        response, _ = self._request('POST', '/v1/feedback/classifications', payload, idempotency_key)
+        if (response.get('job_id') != payload['job_id'] or
+                response.get('input_sha256') != payload['artifact']['sha256'] or
+                response.get('rubric') != payload['rubric'] or
+                response.get('status') not in ('human_review', 'needs_clarification')):
+            raise EvaluatorError('classification identity or status mismatch')
+        return response
+
+    def submit(self, request: dict, idempotency_key: str) -> str:
+        payload = self._payload(request, idempotency_key)
         response, _ = self._request('POST', '/v1/evaluations', payload, idempotency_key)
         evaluation_id = response.get('evaluation_id')
         if not isinstance(evaluation_id, str) or not evaluation_id:
