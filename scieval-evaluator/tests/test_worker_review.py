@@ -1,0 +1,62 @@
+import hashlib
+import json
+import sqlite3
+import tempfile
+import threading
+import unittest
+from http.server import HTTPServer
+from pathlib import Path
+
+from http_evaluator import HttpEvaluator
+from review_worker import review_worker_artifact
+from server import make_handler
+from test_workflow import Model
+
+
+class WorkerReviewTests(unittest.TestCase):
+    def test_worker_html_reaches_evaluator_and_retry_reuses_report(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            Model.calls = 0
+            Model.bad = False
+            model = HTTPServer(('127.0.0.1', 0), Model)
+            dbpath = str(Path(tmp) / 'db')
+            with sqlite3.connect(dbpath) as db:
+                db.execute('CREATE TABLE evaluations (key TEXT PRIMARY KEY, digest TEXT NOT NULL, evaluation_id TEXT UNIQUE NOT NULL, report TEXT NOT NULL)')
+            server = HTTPServer(('127.0.0.1', 0), make_handler(dbpath, 'secret', f'http://127.0.0.1:{model.server_port}', 'model-secret', 'test'))
+            for instance in (model, server):
+                threading.Thread(target=instance.serve_forever, daemon=True).start()
+                self.addCleanup(instance.server_close)
+                self.addCleanup(instance.shutdown)
+            html = Path(tmp) / 'revised.html'
+            html.write_text('<p>水会蒸发</p>', encoding='utf-8')
+            token = Path(tmp) / 'token'
+            token.write_text('secret')
+            client = HttpEvaluator(f'http://127.0.0.1:{server.server_port}', str(token))
+            args = dict(task_id='t1', job_id='lesson-1', round_number=2, html_path=html,
+                        rubric={'id':'scieval-equip-13','version':'draft-1'}, policy_version='draft-1', pass_score=3)
+            result = review_worker_artifact(client, **args)
+            retry = review_worker_artifact(client, **args)
+            self.assertEqual(Model.calls, 1)
+            self.assertEqual(result['evaluation_id'], retry['evaluation_id'])
+            self.assertEqual(result['artifact_sha256'], hashlib.sha256(html.read_bytes()).hexdigest())
+            self.assertEqual(result['recommendation'], 'revise')
+            self.assertEqual(result['decision'], 'human_review')
+            self.assertEqual(len(result['criteria']), 13)
+            self.assertTrue(all(x['result'] == 'revise' and x['evidence'][0]['quote'] == '水会蒸发' for x in result['criteria']))
+            args['pass_score'] = 2
+            passed = review_worker_artifact(client, **args)
+            self.assertEqual(passed['recommendation'], 'pass')
+            self.assertEqual(passed['decision'], 'human_review')
+
+    def test_wrong_report_identity_rejected(self):
+        class Fake:
+            def submit(self, request, key): return 'expected'
+            def query(self, evaluation_id): return {'job_id': 'wrong'}
+        with tempfile.TemporaryDirectory() as tmp:
+            html = Path(tmp) / 'lesson.html'
+            html.write_text('<p>内容</p>')
+            with self.assertRaises(ValueError):
+                review_worker_artifact(Fake(), task_id='t', job_id='j', round_number=1, html_path=html,
+                    rubric={'id':'scieval-equip-13','version':'draft-1'}, policy_version='draft-1', pass_score=2)
+
+if __name__ == '__main__': unittest.main()

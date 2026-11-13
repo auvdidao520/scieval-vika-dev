@@ -34,3 +34,13 @@ PYTHONPATH=scieval-evaluator python3 -m unittest discover -s scieval-evaluator/t
 此接口没有连接 IM 身份校验、去重、Vika task_create/task_route、Worker、渲染评测、教师确认或发布，不能作为自动派工的授权。草案 rubric 尚无完整评分锚点，也没有真实模型的质量验证。见 [交互式闭环接口设计](闭环接口设计.html)，其中明确区分代码与待实现部分。
 
 分类缓存与评测报告共用服务的本地 SQLite，沿用单实例假设。模型完成后、缓存写入前若进程崩溃，重试仍可能再次调用模型；这不提供跨系统恰好一次派工保证。
+
+## Worker 修订稿复评交接（试点）
+
+可信宿主取得 Worker 输出的本地 UTF-8 HTML 后，可显式调用复评交接。它上传文件实际字节到现有 `/v1/evaluations`，用同一 rubric 及 policy 评测，检查作业、轮次、摘要和评测身份，并返回 13 项分数、原文证据、建议和逐项 `pass` / `revise` / `human_review`。未评分项不会通过。相同任务、轮次、内容和策略的重试复用评测报告；不同内容产生独立报告。须由调用方为本次试点明确选择评分阈值：它并非已验证的教学标准。总体 `recommendation` 仅供参考，最终 `decision` 始终是 `human_review`，教师确认之前不能发布。
+
+```sh
+python3 scieval-evaluator/review_worker.py revised.html --task-id t1 --job-id lesson-001 --round 2 --pass-score 2 --token-file /安全目录/local-token --output review.json
+```
+
+示例阈值仅用于演示，不代表已确认的验收标准。当前交接需要可信宿主手动调用并提供真实任务 ID、作业 ID 和轮次，尚未从 Vika Worker 完成事件自动接收文件，也没有自动回派或轮次控制。原生 `task_route` 接受已认证的输入事件，并不是任意评测报告投递接口；不能伪造事件来回派。需要与 Vika 宿主约定可信交接方式后接线。报告中的定位只做非空检查，文字证据只检查是否在 HTML 源码中，没有渲染检查；量表、模型、阈值均未校准，也没有教师确认或发布集成。
