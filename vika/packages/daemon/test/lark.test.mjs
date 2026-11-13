@@ -353,12 +353,29 @@ describe('Lark subscriber process group', () => {
         if (error.code === 'ESRCH') return true;
         throw error;
       }
+      // In containers without a reaping init, an orphan can stay as a
+      // zombie after SIGKILL. kill(pid, 0) still succeeds, but it can no
+      // longer execute. Reaping that PID belongs to its new parent.
+      if (process.platform === 'linux') {
+        try {
+          if (/^State:\s+Z\b/m.test(fs.readFileSync(`/proc/${pid}/status`, 'utf8'))) return true;
+        } catch (error) {
+          if (error.code === 'ENOENT') return true;
+          throw error;
+        }
+      }
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
     return false;
   }
 
-  it('reaps leftover group members when the subscriber leader exits', {
+  it('does not treat a live process as terminated', {
+    skip: process.platform === 'win32',
+  }, async () => {
+    assert.equal(await waitUntilDead(process.pid, 50), false);
+  });
+
+  it('terminates leftover group members when the subscriber leader exits', {
     skip: process.platform === 'win32',
   }, async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'lark-subscriber-tree-'));
