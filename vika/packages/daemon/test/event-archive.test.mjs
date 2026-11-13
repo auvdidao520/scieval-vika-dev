@@ -14,9 +14,9 @@ test('shadow archive survives restart and legacy reader, with transactional roll
   const file = path.join(dir, 'state.db');
   let db = new DatabaseSync(file);
   try {
-    db.exec("PRAGMA foreign_keys=ON; CREATE TABLE connector_events(seq INTEGER PRIMARY KEY, status TEXT, event_json TEXT NOT NULL)");
+    db.exec("PRAGMA foreign_keys=ON; CREATE TABLE connector_events(seq INTEGER PRIMARY KEY, status TEXT, event_json TEXT NOT NULL, connector_instance TEXT, event_id TEXT, UNIQUE(connector_instance,event_id))");
     const json = JSON.stringify({ content: '重试', nested: { n: 1 } });
-    db.prepare('INSERT INTO connector_events VALUES (1, ?, ?), (2, ?, ?)').run('DONE', json, 'PENDING', '{}');
+    db.prepare("INSERT INTO connector_events VALUES (1, ?, ?, 'c', '1'), (2, ?, ?, 'c', '2')").run('DONE', json, 'PENDING', '{}');
     migrateEventArchive(db);
     assert.throws(() => archiveDoneEvent(db, 2), /not found/);
     db.exec('BEGIN IMMEDIATE');
@@ -31,6 +31,10 @@ test('shadow archive survives restart and legacy reader, with transactional roll
     assert.throws(() => db.prepare('DELETE FROM connector_events WHERE seq=1').run(), /immutable/);
     assert.throws(() => db.prepare("UPDATE connector_events SET event_json='{}' WHERE seq=1").run(), /immutable/);
     assert.throws(() => db.prepare('DELETE FROM connector_event_archive WHERE seq=1').run(), /immutable/);
+    assert.throws(() => db.exec(`INSERT OR REPLACE INTO connector_events VALUES (1,'DONE','{}','other','other')`), /immutable/);
+    assert.throws(() => db.exec(`INSERT OR REPLACE INTO connector_events VALUES (99,'DONE','{}','c','1')`), /immutable/);
+    assert.throws(() => db.exec(`INSERT OR REPLACE INTO connector_event_archive SELECT * FROM connector_event_archive WHERE seq=1`), /immutable/);
+    assert.equal(readArchivedEvent(db, 1), json);
     db.exec('DROP TRIGGER event_archive_no_update'); // simulate corruption outside normal SQL access
     db.prepare('UPDATE connector_event_archive SET version=2 WHERE seq=1').run();
     assert.throws(() => readArchivedEvent(db, 1), /unsupported/);
@@ -48,7 +52,7 @@ test('bounded batches survive SIGKILL and WAL backup retains committed archive',
   const copy = path.join(dir, 'backup.sqlite');
   let db = new DatabaseSync(file);
   try {
-    db.exec("PRAGMA journal_mode=WAL; CREATE TABLE connector_events(seq INTEGER PRIMARY KEY, status TEXT, event_json TEXT, received_at_ms INTEGER); INSERT INTO connector_events VALUES(1,'DONE','{\"x\":1}',1),(2,'DONE','{\"x\":2}',2),(3,'PENDING','{}',1)");
+    db.exec("PRAGMA journal_mode=WAL; CREATE TABLE connector_events(seq INTEGER PRIMARY KEY, status TEXT, event_json TEXT, received_at_ms INTEGER, connector_instance TEXT, event_id TEXT, UNIQUE(connector_instance,event_id)); INSERT INTO connector_events VALUES(1,'DONE','{\"x\":1}',1,'c','1'),(2,'DONE','{\"x\":2}',2,'c','2'),(3,'PENDING','{}',1,'c','3')");
     migrateEventArchive(db);
     const moduleUrl = new URL('../src/event-archive.mjs', import.meta.url).href;
     const child = spawnSync(process.execPath, ['--input-type=module', '-e', `import {DatabaseSync} from 'node:sqlite'; import {archiveDoneBatch} from ${JSON.stringify(moduleUrl)}; const db=new DatabaseSync(process.argv[1]); db.exec('BEGIN IMMEDIATE'); archiveDoneBatch(db,{before:10,limit:1}); process.kill(process.pid,'SIGKILL')`, file]);

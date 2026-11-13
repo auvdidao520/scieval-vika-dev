@@ -402,13 +402,16 @@ export class Store {
       ON CONFLICT(conv_key) DO NOTHING
     `);
     this.insertInbound = this.db.prepare(`
+      WITH incoming(${Array.from({length: 26}, (_, i) => `c${i + 1}`).join(', ')}) AS (VALUES (${Array(26).fill('?').join(', ')}))
       INSERT OR IGNORE INTO connector_events(
         connector_instance, kind, subject_type, subject_id, scope_key, event_json, tenant_key,
         message_id, event_id, conv_key, chat_id, chat_type, message_type,
         source, sender_id, sender_type, root_id, parent_id, thread_id, thread_root_id,
         content, mentions_json, create_time_ms, received_at_ms,
         status, filter_reason
-      ) VALUES (${Array(26).fill('?').join(', ')})
+      ) SELECT * FROM incoming
+      WHERE NOT EXISTS (SELECT 1 FROM connector_events e
+        WHERE e.connector_instance = incoming.c1 AND e.event_id = incoming.c9)
     `);
     this.getInboundByMessage = this.db.prepare('SELECT * FROM connector_events WHERE connector_instance = ? AND message_id = ? ORDER BY seq DESC LIMIT 1');
     this.getInboundByEvent = this.db.prepare('SELECT * FROM connector_events WHERE connector_instance = ? AND event_id = ?');

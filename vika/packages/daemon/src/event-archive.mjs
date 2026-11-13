@@ -13,6 +13,13 @@ export function migrateEventArchive(db) {
     version INTEGER NOT NULL, payload BLOB NOT NULL,
     byte_length INTEGER NOT NULL, sha256 TEXT NOT NULL
   );
+  CREATE TRIGGER IF NOT EXISTS archived_event_no_insert BEFORE INSERT ON connector_events
+  WHEN EXISTS (SELECT 1 FROM connector_events e JOIN connector_event_archive a ON a.seq=e.seq
+    WHERE e.seq=NEW.seq OR (e.connector_instance=NEW.connector_instance AND e.event_id=NEW.event_id))
+  BEGIN SELECT RAISE(ABORT, 'archived event is immutable'); END;
+  CREATE TRIGGER IF NOT EXISTS event_archive_no_insert BEFORE INSERT ON connector_event_archive
+  WHEN EXISTS (SELECT 1 FROM connector_event_archive WHERE seq=NEW.seq)
+  BEGIN SELECT RAISE(ABORT, 'event archive is immutable'); END;
   CREATE TRIGGER IF NOT EXISTS archived_event_no_delete BEFORE DELETE ON connector_events
   WHEN EXISTS (SELECT 1 FROM connector_event_archive WHERE seq=OLD.seq)
   BEGIN SELECT RAISE(ABORT, 'archived event is immutable'); END;
