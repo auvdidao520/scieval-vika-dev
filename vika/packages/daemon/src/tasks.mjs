@@ -335,7 +335,7 @@ export class TaskManager {
     for (const key of ['lessonId', 'jobId', 'rubricId', 'rubricVersion', 'policyVersion']) {
       if (typeof context[key] !== 'string' || !context[key].trim() || context[key].length > 200) throw new Error(`invalid ${key}`);
     }
-    if (!Number.isSafeInteger(context.round) || context.round < 1 || !Number.isInteger(context.passScore) || context.passScore < 0 || context.passScore > 3) throw new Error('invalid round or threshold');
+    if (!Number.isSafeInteger(context.round) || context.round < 1 || !Number.isInteger(context.passScore) || context.passScore < 1 || context.passScore > 3) throw new Error('invalid round or threshold');
     const artifact = context.artifactPath;
     if (typeof artifact !== 'string' || !artifact || path.isAbsolute(artifact) || artifact.split(/[\\/]/).some((part) => !part || part === '.' || part === '..') || !artifact.endsWith('.html')) throw new Error('invalid artifact path');
     this.db.prepare(`INSERT INTO lesson_task_contexts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)

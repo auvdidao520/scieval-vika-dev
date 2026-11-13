@@ -22,8 +22,8 @@ def review_worker_artifact(client, *, task_id, job_id, round_number, html_path,
         raise ValueError('job_id is required')
     if type(round_number) is not int or round_number < 1:
         raise ValueError('round must be a positive integer')
-    if type(pass_score) is not int or not 0 <= pass_score <= 3:
-        raise ValueError('pass_score must be an explicitly selected integer from 0 to 3')
+    if type(pass_score) is not int or not 1 <= pass_score <= 3:
+        raise ValueError('pass_score must be an explicitly selected integer from 1 to 3')
     if not isinstance(rubric, dict) or set(rubric) != {'id', 'version'} or any(not isinstance(v, str) or not v for v in rubric.values()):
         raise ValueError('rubric id and version are required')
     if not isinstance(policy_version, str) or not policy_version:
@@ -64,9 +64,9 @@ def review_worker_artifact(client, *, task_id, job_id, round_number, html_path,
                     or not entry['quote'] or entry['quote'] not in html
                     or not isinstance(entry.get('locator'), str) or not entry['locator']):
                 raise ValueError('invalid criterion evidence')
-        if item['status'] == 'scored' and not evidence:
+        if item['status'] == 'scored' and item['score'] != 0 and not evidence:
             raise ValueError('scored criterion requires evidence')
-        outcome = ('pass' if item['score'] >= pass_score else 'revise') if item['status'] == 'scored' else 'human_review'
+        outcome = ('pass' if item['score'] >= pass_score else 'revise') if item['status'] == 'scored' and item['score'] != 0 else 'human_review'
         results.append({'criterion_id': item['criterion_id'], 'result': outcome,
                         'score': item['score'], 'evidence': evidence,
                         'reasoning': item['reasoning'], 'recommendations': item['recommendations']})

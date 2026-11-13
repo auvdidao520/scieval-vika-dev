@@ -60,6 +60,33 @@ class WorkerReviewTests(unittest.TestCase):
             self.assertEqual(passed['recommendation'], 'pass')
             self.assertEqual(passed['decision'], 'human_review')
 
+    def test_na_score_requires_human_review_and_zero_threshold_is_rejected(self):
+        from framework import CRITERIA
+        class Fake:
+            def submit(self, request, key):
+                self.request = request
+                return 'evaluation'
+            def query(self, evaluation_id):
+                return {'schema_version': '1.0', 'evaluation_id': evaluation_id,
+                        'job_id': 'j', 'round': 1, 'input_uri': self.request['uri'],
+                        'input_sha256': self.request['sha256'], 'rubric_id': 'scieval-equip-13',
+                        'rubric_version': 'draft-1', 'policy_version': 'draft-1',
+                        'evaluator_version': 'test', 'created_at': 'now',
+                        'criteria': [{'criterion_id': k, 'status': 'scored',
+                                      'score': 0, 'evidence': [], 'reasoning': 'N/A',
+                                      'recommendations': []} for k in CRITERIA],
+                        'decision': {'result': 'human_review', 'reason': 'test'}}
+        with tempfile.TemporaryDirectory() as tmp:
+            html = Path(tmp) / 'lesson.html'
+            html.write_text('<p>内容</p>')
+            args = dict(task_id='t', job_id='j', round_number=1, html_path=html,
+                        rubric={'id':'scieval-equip-13','version':'draft-1'}, policy_version='draft-1', pass_score=1)
+            result = review_worker_artifact(Fake(), **args)
+            self.assertEqual(result['recommendation'], 'human_review')
+            self.assertTrue(all(item['result'] == 'human_review' for item in result['criteria']))
+            args['pass_score'] = 0
+            with self.assertRaises(ValueError): review_worker_artifact(Fake(), **args)
+
     def test_wrong_report_identity_rejected(self):
         class Fake:
             def submit(self, request, key): return 'expected'
